@@ -60,7 +60,40 @@ the true kernel — no future knowledge.
 
 ### Verification results
 
-(filled in post-sweep)
+- 36/36 tests. Three new pins: exact kernel distribution vs the
+  transition.step_hidden sampler (Monte-Carlo, 10 cores x 20k draws);
+  the relative pipeline encoding vs the real Books machinery on 60
+  randomized 26-week scenarios; causal >= clairvoyant on seeds 1-8 with
+  belief support <= 3 (the runner additionally cross-checks every step:
+  unique observation-group match, cost and inventory agreement with the
+  live engine).
+- Exact solve: ~122s once per config (~1.3M V / 1.6M Q memo entries);
+  per-seed playback is instantaneous — the policy is solved once, not
+  per seed. The first (absolute-tuple) encoding did NOT terminate; the
+  relative encoding (e0, e1, queued_qty, arrivals<=3wk) is what makes
+  the exact solve tractable, and is value-preserving by construction.
+- Ex-ante expected cost 3839.8. Sweep seeds 1-20: causal mean 4087.
+  Luck premium (causal - clairvoyant) in [0, 1120], mean 572 — and
+  exactly 0 on the quiet seeds (4, 14, 19), as it must be.
+- Gap (naive_min - causal) in [320, 1100], mean 505; the causal oracle
+  beats every naive baseline on 20/20 seeds. The anchor is strictly
+  harder than naive_min and strictly fairer than clairvoyance. Regret
+  decomposition now available per seed:
+  agent - causal = skill deficit; causal - clairvoyant = luck premium.
+- Structural predictions (decision 7) confirmed: belief-dependent
+  base-stock shape; ordering pauses exactly on crash weeks (never
+  dispatch into a possibly blocked canal) with immediate resumption;
+  short blockages ridden out via Suez, no Cape switch — consistent with
+  the short-dominated crash posterior (0.50 short / 0.21 long / 0.29
+  false alarm, narrowing to {short, long} when a queued ship excludes
+  the false alarm).
+- EMPIRICAL FINDING — the optimal policy buys ZERO briefings on all 20
+  seeds. The chokepoint status leak does most of the briefing's job for
+  free, and the residual VOI never reaches the 30 price. Consequence
+  for the benchmark: briefing purchases by agents are measurable
+  OVERSPEND, not skill. If the briefing lever should do real work,
+  either price it below the crash-week VOI or weaken the status leak;
+  recorded as an open design question, not changed here.
 
 ## 2026-06-11 (b) — V2 task surface: the real planner job
 
