@@ -3,6 +3,65 @@
 Design decisions for the supply-chain POMDP world. Each entry records what
 changed, why, and the evidence. Code follows this file, never the reverse.
 
+## 2026-06-11 (c) — Causal-aware oracle: the benchmark anchor
+
+### Problem
+
+The clairvoyant oracle is luck-INCLUSIVE: it reads the realized future, so
+regret against it mixes "the agent played worse than it could have" with
+"the agent could not have known". The benchmark anchor must be the optimal
+NON-clairvoyant policy: the best achievable expected cost given exactly the
+agent's information (counts, bulletin, books, optional paid briefing) and
+the true kernel — no future knowledge.
+
+### Decisions
+
+1. **Formal class & solver.** The world is a finite-horizon MOMDP
+   (Ong/Png/Hsu/Lee 2010: books observed, event core hidden) whose hidden
+   factor is an exogenous semi-Markov mode process (HM-MDP, Choi & Yeung)
+   with deterministic observations (DetPOMDP, Bonet 2009). Reachable
+   beliefs are finitely supported — at most {false_alarm, short-onset,
+   long-onset} at a crash week — so the exact solver is finite-horizon
+   expectimax / DP on the belief-MDP (Ross et al., JAIR 2008). No
+   point-based (SARSOP/PBVI) or Monte-Carlo (POMCP/DESPOT) machinery is
+   needed; the oracle is exact, not approximate.
+2. **Module `src/world/causal_oracle.py`**: exact transition distribution
+   mirroring transition.step_hidden (agreement pinned by a Monte-Carlo
+   test), a pure-tuple mirror of logistics.resolve_week (agreement pinned
+   by a randomized scenario test), memoized expectimax over
+   (week, belief, inventory, pipeline), and a policy runner that plays the
+   live engine FROM OBSERVATIONS ONLY (regime inverted from the noiseless
+   suez count; briefing text parsed back to a type; per-step cost asserted
+   against the DP branch).
+3. **Observation grouping uses the full agent-visible outcome** — regime
+   AND pipeline statuses/arrivals AND arrived qty — not counts alone. Ship
+   state leaks information by design and the belief update must honor it:
+   a Suez ship queued at the chokepoint on the crash week excludes
+   false_alarm ("our ship did not sail through"); a Cape ETA slip at the
+   rounding point reveals a long crisis. These leaks are realistic and
+   intended; the causal oracle exploits them optimally.
+4. **Briefing as a controlled-sensing action** (ACNO-style, Krale et al.
+   2023): considered only when the belief is non-degenerate (zero VOI
+   otherwise), bought iff expected savings >= 30, decided inside the DP —
+   no special-casing or hand-set threshold.
+5. **Tractability prune (policy-space restriction, never a semantics
+   change):** qty > 0 is disallowed when inventory position (on hand + on
+   water) already covers all remaining demand; such an order can only add
+   shipping/holding cost, so the prune is dominance-safe.
+6. **cape_local is integrated out at the resolve step** — it is iid,
+   observed when it matters, and never persists; it branches the chance
+   node only when a Cape ship sits at its congestion point that week.
+7. **Structural predictions to check at sign-off** (from the OR
+   literature: Song-Zipkin belief-dependent base-stock; Tomlin 2006
+   contingent rerouting): the causal oracle should (a) run a base-stock-
+   like qty rule modulated by the belief, (b) reroute via Cape on
+   revealed long crises, ride out short blockages, (c) buy the briefing
+   only at crash weeks, if at all.
+
+### Verification results
+
+(filled in post-sweep)
+
 ## 2026-06-11 (b) — V2 task surface: the real planner job
 
 ### Problem
