@@ -8,6 +8,8 @@ in-transit holding, variable order quantity, the two-stage week
 boundary, and clairvoyant DP == engine replay.
 """
 
+import random
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -19,6 +21,11 @@ from src.world.logistics import Books, resolve_week
 from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
 from src.world.semantics import BULLETINS
 from src.world.state import HiddenState
+from src.world.causal_oracle import (EMPTY_PIPE, CausalOracle, canonical,
+                                     causal_play, resolve_rel,
+                                     transition_dist)
+from src.world.transition import step_hidden
+
 
 CFG = WorldConfig()
 
@@ -396,3 +403,68 @@ def test_api_briefing_and_anon_episode():
     ok = client.post(f"/episodes/{eid}/step", json={"qty": 20, "route": "route_1"})
     assert ok.status_code == 200
     assert ok.json()["obs"]["cost_breakdown"]["briefing"] == CFG.briefing_cost
+
+
+# --- causal-aware oracle (the benchmark anchor) --------------------------
+
+
+@pytest.fixture(scope="module")
+def causal():
+    return CausalOracle(CFG)
+
+
+def test_transition_dist_matches_sampler():
+    """The DP's exact kernel must agree with transition.step_hidden."""
+    rng = random.Random(0)
+    cores = [("calm", 0, None), ("watch", 0, None),
+             ("disruption", 0, "short"), ("disruption", 1, "short"),
+             ("disruption", 0, "long"), ("disruption", 1, "long"),
+             ("recovery", 0, None), ("recovery", 1, None),
+             ("recovery", 2, None), ("false_alarm", 0, None)]
+    n = 20000
+    for core in cores:
+        dist = dict(transition_dist(core, CFG))
+        assert abs(sum(dist.values()) - 1) < 1e-12
+        seen = {}
+        h = HiddenState(*core)
+        for _ in range(n):
+            h2 = step_hidden(h, rng, CFG)
+            k = canonical((h2.event_state, h2.event_age,
+                           h2.disruption_type), CFG)
+            seen[k] = seen.get(k, 0) + 1
+        assert set(seen) == set(dist), core
+        for k, p in dist.items():
+            assert abs(seen[k] / n - p) < 0.02, (core, k)
+
+
+def test_resolve_rel_mirrors_resolve_week():
+    """The DP's relative pipeline encoding must reproduce the real Books
+    machinery week by week on randomized hidden paths and orders."""
+    rng = random.Random(42)
+    for trial in range(60):
+        books = Books(inventory=CFG.initial_inventory)
+        pipe, inv = EMPTY_PIPE, CFG.initial_inventory
+        h = HiddenState()
+        for week in range(1, CFG.horizon_weeks + 1):
+            h = step_hidden(h, rng, CFG)
+            qty = rng.choice(CFG.order_quantities)
+            route = rng.choice(("suez", "cape")) if qty else None
+            arrived, costs = resolve_week(books, qty, route, h, week, CFG)
+            core = (h.event_state, h.event_age, h.disruption_type)
+            pipe, inv, arrived2, cost2 = resolve_rel(
+                pipe, inv, qty, route, core, h.cape_local_congestion, CFG)
+            assert arrived2 == arrived, (trial, week)
+            assert inv == books.inventory, (trial, week)
+            assert abs(cost2 - sum(costs.values())) < 1e-9, (trial, week)
+
+
+def test_causal_oracle_within_bounds(causal):
+    """Clairvoyance is luck-inclusive: the causal oracle can never beat
+    it on any seed. causal_play also self-checks every step (obs-group
+    uniqueness, cost and inventory agreement with the engine), and the
+    belief support must never exceed the three crash-week atoms."""
+    for seed in range(1, 9):
+        cost, rows = causal_play(seed, oracle=causal)
+        clair, _ = oracle_plan(seed, CFG)
+        assert cost >= clair - 1e-6, seed
+        assert all(r["belief_support"] <= 3 for r in rows), seed
