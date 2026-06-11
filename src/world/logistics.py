@@ -42,16 +42,21 @@ class Books:
         self.pipeline: list[Shipment] = []
 
 
-def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> None:
-    """Resolve one in-flight shipment against this week's world."""
+def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> float:
+    """Resolve one in-flight shipment against this week's world. Returns
+    the diversion surcharge billed this week: a diverted voyage is a Cape
+    voyage, so the carrier passes through the Cape price differential -
+    otherwise ordering Suez into a known crisis and letting the carrier
+    divert would be cheaper than booking Cape outright."""
     if s.arrives_week is not None:
-        return
+        return 0.0
     elapsed = week - s.dispatched_week
     if s.route == "suez":
         if s.status == "queued_at_suez":
             if h.canal_blocked:
                 s.status = "diverted_via_cape"
                 s.arrives_week = week + cfg.divert_extra_weeks
+                return (cfg.cape_unit_cost - cfg.suez_unit_cost) * s.qty
             else:
                 s.status = "at_sea"
                 s.arrives_week = week + (cfg.suez_total_weeks - cfg.suez_chokepoint_offset)
@@ -69,6 +74,7 @@ def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> None:
                              and h.disruption_type == "long"))
             extra = cfg.cape_congested_extra_weeks if congested else 0
             s.arrives_week = s.dispatched_week + cfg.cape_total_weeks + extra
+    return 0.0
 
 
 def resolve_week(books: Books, qty: int, route: str | None, h: HiddenState,
@@ -81,8 +87,9 @@ def resolve_week(books: Books, qty: int, route: str | None, h: HiddenState,
         books.pipeline.append(Shipment(qty, route, week))
         shipping = qty * unit
 
+    surcharge = 0.0
     for s in books.pipeline:
-        _advance(s, h, week, cfg)
+        surcharge += _advance(s, h, week, cfg)
 
     arrived = sum(s.qty for s in books.pipeline if s.arrives_week == week)
     books.pipeline = [s for s in books.pipeline if s.arrives_week != week]
@@ -95,6 +102,7 @@ def resolve_week(books: Books, qty: int, route: str | None, h: HiddenState,
     in_transit = sum(s.qty for s in books.pipeline)
     costs = {
         "shipping": shipping,
+        "surcharge": surcharge,  # diverted voyages billed at the Cape rate
         "holding": cfg.holding_cost * books.inventory,
         "in_transit": cfg.holding_cost * in_transit,  # capital cost on the water
         "stockout": cfg.stockout_cost * shortfall,

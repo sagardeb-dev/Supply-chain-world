@@ -180,6 +180,18 @@ def test_cape_congestion_at_rounding_week():
     assert blockage.arrives_week == 5  # short blockage never congests the Cape
 
 
+def test_diversion_surcharge_billed_at_cape_rate():
+    # A diverted voyage is a Cape voyage: the carrier bills the price
+    # differential at the diversion week. Without this, ordering Suez
+    # into a known crisis would dominate booking Cape outright.
+    hidden = [CALM, CALM, LONG, HiddenState("disruption", 1, "long"),
+              CALM, CALM, CALM]
+    _, s, costs = sail(hidden, orders=[(20, "suez")] + [(0, None)] * 6)
+    assert s.status == "diverted_via_cape"
+    assert costs[3]["surcharge"] == (CFG.cape_unit_cost - CFG.suez_unit_cost) * 20
+    assert all(c["surcharge"] == 0 for i, c in enumerate(costs) if i != 3)
+
+
 def test_in_transit_holding_charged():
     _, _, costs = sail([CALM] * 4)
     assert [c["in_transit"] for c in costs] == [20, 40, 60, 60]

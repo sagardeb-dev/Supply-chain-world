@@ -87,6 +87,17 @@ def optimal_plan_for(trajectory: list[HiddenState], cfg: WorldConfig):
                 transit_weeks = (a if lands else H + 1) - week
                 dispatch_cost = (qty * unit
                                  + cfg.holding_cost * qty * transit_weeks)
+                if route == "suez":
+                    cw = week + cfg.suez_chokepoint_offset
+                    diverted = (cw + 1 <= H
+                                and trajectory[cw - 1].canal_blocked
+                                and trajectory[cw].canal_blocked)
+                    if diverted:
+                        # diverted voyage billed at the Cape rate; the
+                        # engine charges this at the diversion week, the
+                        # DP up-front - same total (cf. in-transit holding)
+                        dispatch_cost += ((cfg.cape_unit_cost
+                                           - cfg.suez_unit_cost) * qty)
             else:
                 lands, dispatch_cost = False, 0.0
 
