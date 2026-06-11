@@ -4,16 +4,21 @@ trace is only served after the episode ends. Route names are translated
 to/from the episode's semantics vocabulary here (R4) - the engine only
 ever sees canonical names."""
 
+from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.world import World, WorldConfig
 from src.world.semantics import ROUTE_PARSE
 
 app = FastAPI(title="supply-chain-pomdp")
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"])
 episodes: dict[str, World] = {}
 
 
@@ -91,3 +96,10 @@ def episode_trace(episode_id: str) -> dict:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "trace available only after the episode ends")
     return {"total_cost": world.total_cost, "trace": world.trace}
+
+
+# Serve the Three.js frontend (if present) from the same origin. Mounted
+# last so the API routes above take precedence.
+_FRONTEND = Path(__file__).resolve().parents[3] / "frontend"
+if _FRONTEND.is_dir():
+    app.mount("/", StaticFiles(directory=_FRONTEND, html=True), name="frontend")

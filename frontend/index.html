@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>supply-chain-pomdp</title>
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="scene"></div>
+
+<!-- ======== top bar ======== -->
+<header id="topbar">
+  <div class="brand">supply-chain<span>·pomdp</span></div>
+  <div id="week-pill" class="pill hidden">
+    <span id="week-label">Week 0 / 26</span>
+    <div class="week-track"><div id="week-fill"></div></div>
+  </div>
+  <div class="spacer"></div>
+  <div id="total-cost" class="pill cost hidden">total <b>$0</b></div>
+  <button id="btn-new-episode" class="ghost">new episode</button>
+</header>
+
+<!-- ======== left: news bulletin ======== -->
+<aside id="news" class="panel hidden">
+  <div class="panel-title">TRADE PRESS — WEEKLY BULLETIN</div>
+  <p id="bulletin-text"></p>
+</aside>
+
+<!-- ======== right: books ======== -->
+<aside id="books" class="panel hidden">
+  <div class="panel-title">YOUR BOOKS</div>
+  <div class="inv-row">
+    <span>inventory</span><b id="inv-num">80</b>
+  </div>
+  <div class="inv-bar"><div id="inv-fill"></div><div class="inv-demand-mark" title="weekly demand"></div></div>
+  <div class="inv-row sub"><span>arrived this week</span><b id="arrived-num">0</b></div>
+  <div class="panel-title gap">PIPELINE</div>
+  <ul id="pipeline-list"><li class="dim">no shipments at sea</li></ul>
+  <div class="panel-title gap">LAST WEEK'S COSTS</div>
+  <div id="cost-chips"><span class="dim">—</span></div>
+</aside>
+
+<!-- ======== briefing card ======== -->
+<div id="briefing-card" class="panel hidden">
+  <div class="panel-title">ANALYST BRIEFING <span class="tag">$30 · charged at commit</span></div>
+  <p id="briefing-text"></p>
+</div>
+
+<!-- ======== bottom: control deck ======== -->
+<footer id="deck" class="panel hidden">
+  <div class="deck-group">
+    <div class="deck-label">order</div>
+    <div class="seg" id="qty-seg">
+      <button data-qty="0" class="active">hold</button>
+      <button data-qty="20">20<span>1 ship</span></button>
+      <button data-qty="40">40<span>2 ships</span></button>
+    </div>
+  </div>
+  <div class="deck-group">
+    <div class="deck-label">route</div>
+    <div class="seg" id="route-seg">
+      <button data-route="suez" class="active suez" disabled>Suez<span>~3 wk · $4/u</span></button>
+      <button data-route="cape" class="cape" disabled>Cape<span>~4 wk · $6/u</span></button>
+    </div>
+  </div>
+  <div class="deck-group">
+    <div class="deck-label">intel</div>
+    <button id="btn-briefing" class="ghost tall">briefing<span>$30</span></button>
+  </div>
+  <button id="btn-commit" class="primary">commit week ▶</button>
+</footer>
+
+<!-- ======== new-episode modal ======== -->
+<div id="modal-new" class="modal">
+  <div class="modal-box">
+    <h1>supply-chain<span>·pomdp</span></h1>
+    <p class="lede">26 weeks on the Asia–Europe lane. Keep 20 units/week flowing.
+       Watch the transit counts — when they crash, is it a false alarm, a grounding,
+       or a war? Order via Suez or around the Cape, and decide when paid intel is
+       worth $30.</p>
+    <div class="form-row">
+      <label>seed <input id="inp-seed" type="number" value="7"></label>
+      <label>semantics
+        <select id="inp-semantics">
+          <option value="real">real (Suez / Red Sea)</option>
+          <option value="anon">anon (Waterway One / Two)</option>
+        </select>
+      </label>
+    </div>
+    <div id="new-error" class="error hidden"></div>
+    <button id="btn-start" class="primary big">start episode</button>
+  </div>
+</div>
+
+<!-- ======== end-of-episode modal ======== -->
+<div id="modal-end" class="modal hidden">
+  <div class="modal-box wide">
+    <h1>episode over</h1>
+    <div class="final-cost">total cost <b id="end-cost">$0</b></div>
+    <div class="panel-title gap">THE REVEAL — HIDDEN TRAJECTORY</div>
+    <div id="trace-strip"></div>
+    <div id="trace-legend"></div>
+    <button id="btn-again" class="primary big">play again</button>
+  </div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
