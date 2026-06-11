@@ -9,9 +9,8 @@ from .logistics import Books, resolve_week
 from .state import HiddenState
 from .transition import step_hidden
 
-HIDDEN_KEYS = {"event_state", "event_age", "suez_regime", "bab_regime",
-               "cape_congestion", "signal_reliability", "seasonal_dip",
-               "cape_local_congestion"}
+HIDDEN_KEYS = {"event_state", "event_age", "disruption_type",
+               "cape_local_congestion", "regime", "canal_blocked"}
 
 
 class World:
@@ -64,7 +63,7 @@ class World:
             **observe_counts(self.hidden, self.cfg),
             "inventory": self.books.inventory,
             "arrived": arrived,
-            "pipeline": [s.to_dict() for s in self.books.pipeline],
+            "pipeline": [s.to_dict(self.cfg) for s in self.books.pipeline],
             "cost_breakdown": dict(costs),
             "probe_result": probe,
         }

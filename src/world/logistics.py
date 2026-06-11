@@ -1,7 +1,14 @@
-"""The agent's own books: shipments, inventory, demand. Deterministic —
-no randomness anywhere in this module."""
+"""The agent's books: shipments, inventory, demand. Deterministic given
+the weekly hidden states — no randomness in this module.
 
-from dataclasses import dataclass, asdict
+Transit-week causality: a chokepoint affects the ships that are AT it
+that week, never the ships merely ordered that week. A Suez ship meets
+the canal at dispatch+suez_chokepoint_offset; the canal's state THAT
+week decides through / backlog / queue. A queued ship waits one week,
+then proceeds if clear or diverts around the Cape. A Cape ship meets
+its congestion point at dispatch+cape_chokepoint_offset."""
+
+from dataclasses import dataclass
 
 from .config import WorldConfig
 from .state import HiddenState
@@ -11,10 +18,22 @@ from .state import HiddenState
 class Shipment:
     qty: int
     route: str
-    arrives_week: int
+    dispatched_week: int
+    status: str = "at_sea"            # at_sea | queued_at_suez | diverted_via_cape
+    arrives_week: int | None = None   # fixed once the chokepoint resolves
 
-    def to_dict(self) -> dict:
-        return asdict(self)
+    def eta(self, cfg: WorldConfig) -> int:
+        """Carrier schedule: the true arrival once known, else the
+        no-incident baseline. May slip — that is the point."""
+        if self.arrives_week is not None:
+            return self.arrives_week
+        base = cfg.suez_total_weeks if self.route == "suez" else cfg.cape_total_weeks
+        return self.dispatched_week + base
+
+    def to_dict(self, cfg: WorldConfig) -> dict:
+        return {"qty": self.qty, "route": self.route,
+                "dispatched_week": self.dispatched_week,
+                "status": self.status, "eta": self.eta(cfg)}
 
 
 class Books:
@@ -23,33 +42,58 @@ class Books:
         self.pipeline: list[Shipment] = []
 
 
-def lead_time(route: str, h: HiddenState, cfg: WorldConfig) -> int:
-    if route == "suez":
-        if h.suez_regime == "degraded":
-            return cfg.suez_disrupted_lead_weeks
-        return cfg.suez_lead_weeks
-    extra = cfg.cape_congested_extra_weeks if h.cape_congestion == "high" else 0
-    return cfg.cape_lead_weeks + extra
+def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> None:
+    """Resolve one in-flight shipment against this week's world."""
+    if s.arrives_week is not None:
+        return
+    elapsed = week - s.dispatched_week
+    if s.route == "suez":
+        if s.status == "queued_at_suez":
+            if h.canal_blocked:
+                s.status = "diverted_via_cape"
+                s.arrives_week = week + cfg.divert_extra_weeks
+            else:
+                s.status = "at_sea"
+                s.arrives_week = week + (cfg.suez_total_weeks - cfg.suez_chokepoint_offset)
+        elif elapsed == cfg.suez_chokepoint_offset:
+            if h.canal_blocked:
+                s.status = "queued_at_suez"
+            else:
+                extra = (cfg.recovery_queue_extra_weeks
+                         if h.event_state == "recovery" else 0)
+                s.arrives_week = s.dispatched_week + cfg.suez_total_weeks + extra
+    else:  # cape
+        if elapsed == cfg.cape_chokepoint_offset:
+            congested = (h.cape_local_congestion
+                         or (h.event_state == "disruption"
+                             and h.disruption_type == "long"))
+            extra = cfg.cape_congested_extra_weeks if congested else 0
+            s.arrives_week = s.dispatched_week + cfg.cape_total_weeks + extra
 
 
 def resolve_week(books: Books, route: str, h: HiddenState, week: int, cfg: WorldConfig):
-    """Dispatch this week's order, land arrivals, consume demand.
-    Returns (arrived_qty, cost_breakdown)."""
+    """Dispatch this week's order, move every in-flight ship one week,
+    land arrivals, consume demand. Returns (arrived_qty, cost_breakdown)."""
     unit = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
-    books.pipeline.append(Shipment(cfg.order_qty, route, week + lead_time(route, h, cfg)))
+    books.pipeline.append(Shipment(cfg.order_qty, route, week))
     shipping = cfg.order_qty * unit
 
+    for s in books.pipeline:
+        _advance(s, h, week, cfg)
+
     arrived = sum(s.qty for s in books.pipeline if s.arrives_week == week)
-    books.pipeline = [s for s in books.pipeline if s.arrives_week > week]
+    books.pipeline = [s for s in books.pipeline if s.arrives_week != week]
     books.inventory += arrived
 
     served = min(books.inventory, cfg.weekly_demand)
     shortfall = cfg.weekly_demand - served
     books.inventory -= served
 
+    in_transit = sum(s.qty for s in books.pipeline)
     costs = {
         "shipping": shipping,
         "holding": cfg.holding_cost * books.inventory,
+        "in_transit": cfg.holding_cost * in_transit,  # capital cost on the water
         "stockout": cfg.stockout_cost * shortfall,
     }
     return arrived, costs

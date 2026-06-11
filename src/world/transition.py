@@ -1,4 +1,5 @@
-"""Hidden-state evolution. Pure function of (state, rng, cfg)."""
+"""Hidden-state evolution. Pure function of (state, rng, cfg); never reads
+actions, so the trajectory is a function of the seed alone (exogeneity)."""
 
 import random
 
@@ -7,34 +8,39 @@ from .state import HiddenState
 
 
 def step_hidden(h: HiddenState, rng: random.Random, cfg: WorldConfig) -> HiddenState:
-    s, age = h.event_state, h.event_age
+    s, age, dtype = h.event_state, h.event_age, h.disruption_type
+    ntype = None
 
     if s == "calm":
-        r = rng.random()
-        if r < cfg.false_alarm_prob:
-            nxt = "false_alarm"
-        elif r < cfg.false_alarm_prob + cfg.onset_prob:
-            nxt = "watch"
-        else:
-            nxt = "calm"
+        nxt = "watch" if rng.random() < cfg.onset_prob else "calm"
     elif s == "watch":
         r = rng.random()
         if r < cfg.watch_to_disruption_prob:
             nxt = "disruption"
-        elif r < cfg.watch_to_disruption_prob + cfg.watch_to_calm_prob:
+            ntype = "short" if rng.random() < cfg.short_disruption_prob else "long"
+        elif r < cfg.watch_to_disruption_prob + cfg.watch_to_false_alarm_prob:
+            nxt = "false_alarm"
+        elif r < (cfg.watch_to_disruption_prob + cfg.watch_to_false_alarm_prob
+                  + cfg.watch_to_calm_prob):
             nxt = "calm"
         else:
             nxt = "watch"
     elif s == "disruption":
-        timeout = age + 1 >= cfg.max_disruption_weeks
-        nxt = "recovery" if timeout or rng.random() > cfg.disruption_persist_prob else "disruption"
+        if dtype == "short":
+            over = age + 1 >= cfg.max_short_weeks or rng.random() > cfg.short_persist_prob
+        else:
+            over = rng.random() > cfg.long_persist_prob
+        nxt = "recovery" if over else "disruption"
+        ntype = None if over else dtype
     elif s == "recovery":
-        nxt = "calm" if rng.random() > cfg.recovery_persist_prob else "recovery"
-    else:  # false_alarm
-        nxt = "calm" if age + 1 >= cfg.max_false_alarm_weeks else "false_alarm"
+        over = age + 1 >= cfg.max_recovery_weeks or rng.random() > cfg.recovery_persist_prob
+        nxt = "calm" if over else "recovery"
+    else:  # false_alarm: the scare resolves within the week
+        nxt = "calm"
 
     return HiddenState(
         event_state=nxt,
         event_age=0 if nxt != s else age + 1,
+        disruption_type=ntype,
         cape_local_congestion=rng.random() < cfg.cape_local_prob,
     )

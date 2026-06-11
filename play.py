@@ -9,9 +9,13 @@ import argparse
 
 from src.world import World
 
+STATUS_MARK = {"at_sea": "", "queued_at_suez": "Q", "diverted_via_cape": "D"}
+
 
 def fmt_obs(obs: dict) -> str:
-    pipe = ", ".join(f"{s['qty']}@wk{s['arrives_week']}({s['route'][0]})" for s in obs["pipeline"]) or "-"
+    pipe = ", ".join(
+        f"{s['qty']}@wk{s['eta']}({s['route'][0]}{STATUS_MARK[s['status']]})"
+        for s in obs["pipeline"]) or "-"
     costs = obs["cost_breakdown"]
     cost_s = " ".join(f"{k}={v:.0f}" for k, v in costs.items() if v) or "-"
     probe = f"  probe={obs['probe_result']}" if obs["probe_result"] else ""
@@ -52,10 +56,8 @@ def main():
     for rec in world.trace:
         h = rec["hidden"]
         flags = []
-        if h["seasonal_dip"]:
-            flags.append("dip")
-        if h["signal_reliability"] == "suppressed":
-            flags.append("suppressed")
+        if h["disruption_type"]:
+            flags.append(h["disruption_type"])
         if h["cape_local_congestion"]:
             flags.append("cape_local")
         print(f"  wk{rec['week']:>2}  {h['event_state']:<12} age={h['event_age']}  "
