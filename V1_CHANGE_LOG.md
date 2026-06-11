@@ -3,6 +3,51 @@
 Design decisions for the supply-chain POMDP world. Each entry records what
 changed, why, and the evidence. Code follows this file, never the reverse.
 
+## 2026-06-11 (b) — V2 task surface: the real planner job
+
+### Problem
+
+The v1 mechanics are causally correct but the task surface is not a real
+job. Order qty is forced at 20/wk (the planner number-one lever — quantity
+and timing — is missing, so holding/stockout costs do no decision work).
+The probe is paid omniscience with backwards timing: it rides on the step,
+so its result describes the NEXT week and arrives with the commitment it
+should have informed. And the semantic channel (news) — the one the
+research claim is about — is absent: counts are numbers in both ablation
+arms, so there is almost nothing semantic to ablate.
+
+### Decisions
+
+1. **Persona**: import replenishment planner, one SKU, Shanghai->Rotterdam,
+   weekly cadence, 26 weeks. Judged on landed cost + holding + service.
+2. **Action space**: qty in {0, 20, 40} x route in {suez, cape} (route only
+   when qty > 0). Demand stays deterministic 20/wk (isolates supply side).
+3. **Two-stage week**: obs -> optional paid analyst briefing (30, describes
+   the CURRENT week hidden state incl. disruption type) -> order. The probe
+   rider is deleted. Same value of information (type one week early at the
+   crash week), sane timing and semantics.
+4. **News bulletin observation channel**: deterministic template on
+   HiddenState.regime. Crash week byte-identical across false_alarm /
+   short-onset / long-onset (R1). No duration or probability language in
+   any text, either mode (R2) — otherwise reading comprehension would
+   substitute for the domain knowledge under test.
+5. **Semantics ablation switch**: cfg.semantics in {real, anon}. Identical
+   information in both modes (R3); anonymization applied only at the
+   presentation boundary — engine internals stay canonical (R4); the
+   post-episode trace reveal stays canonical (analysis-side artifact).
+6. **Balance**: the quiet-seed gap-0 property dies by design (the oracle
+   burns the initial 80 buffer by ordering 0 early). New naive anchor set:
+   always-suez-20, always-cape-20, base-stock-suez (order-up-to 80 =
+   demand x (suez lead + 1)). Gates re-derived post-sweep; numbers
+   recorded below after verification.
+
+Deferred: causal-aware oracle (next build), demand noise, freight-rate
+spikes, air expedite, agent harness.
+
+### Verification results
+
+(to be filled in after the post-build sweep)
+
 ## 2026-06-11 — Transit-week causality rebuild
 
 ### Problem
