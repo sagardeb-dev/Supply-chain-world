@@ -41,12 +41,39 @@ arms, so there is almost nothing semantic to ablate.
    demand x (suez lead + 1)). Gates re-derived post-sweep; numbers
    recorded below after verification.
 
+7. **Diversion surcharge** (found during sign-off): the first sweep's
+   oracle ordered Suez throughout long crises because a diverted voyage
+   was billed at the Suez rate for what is physically a Cape transit
+   (200 vs 220 to book Cape outright) - the route lever went dead
+   exactly when it should matter most. Fix: the Cape price differential
+   ((cape - suez) x qty) is billed at the diversion week, mirroring
+   carriers' documented diversion surcharges. The DP charges it
+   up-front at dispatch (same accounting as in-transit holding);
+   replay equality re-verified.
+
 Deferred: causal-aware oracle (next build), demand noise, freight-rate
 spikes, air expedite, agent harness.
 
 ### Verification results
 
-(to be filled in after the post-build sweep)
+- test_world.py: 33/33 passing (incl. crash-bulletin identity R1, banned
+  duration vocabulary R2, anon leak scan, real/anon numeric identity R3,
+  diversion surcharge, DP == engine replay).
+- Sweep (seeds 1-20, commit 68297b0): gap = naive_min - oracle with
+  naive_min over {suez20, cape20, basestock-80}: min 360, max 1840,
+  mean 1077; 20/20 discriminative. Quiet seeds (14, 19) floor at 360 =
+  pure inventory-policy skill (basestock holds excess buffer a
+  clairvoyant does not need); disruption seeds gap 1100-1840. suez20 is
+  strictly worse than basestock on quiet seeds, so the qty lever does
+  real decision work.
+- Oracle plans (seeds 6, 12) post-surcharge: front-load 40 before onset,
+  Cape during long crises, switch back to Suez (queue-and-wait) when the
+  reopening is imminent - the documented 2024 importer playbook.
+- DP runtime ~1.5 s/seed on the (qty, route) lattice; no inventory cap
+  needed.
+- NOTE vs v1: the quiet-seed gap-0 property is retired by design; the
+  oracle-vs-naive gap now includes inventory-policy skill (floor ~360)
+  on top of disruption response.
 
 ## 2026-06-11 — Transit-week causality rebuild
 
