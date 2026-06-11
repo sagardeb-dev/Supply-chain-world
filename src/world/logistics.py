@@ -1,5 +1,5 @@
 """The agent's books: shipments, inventory, demand. Deterministic given
-the weekly hidden states — no randomness in this module.
+the weekly hidden states - no randomness in this module.
 
 Transit-week causality: a chokepoint affects the ships that are AT it
 that week, never the ships merely ordered that week. A Suez ship meets
@@ -24,7 +24,7 @@ class Shipment:
 
     def eta(self, cfg: WorldConfig) -> int:
         """Carrier schedule: the true arrival once known, else the
-        no-incident baseline. May slip — that is the point."""
+        no-incident baseline. May slip - that is the point."""
         if self.arrives_week is not None:
             return self.arrives_week
         base = cfg.suez_total_weeks if self.route == "suez" else cfg.cape_total_weeks
@@ -71,12 +71,15 @@ def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> None:
             s.arrives_week = s.dispatched_week + cfg.cape_total_weeks + extra
 
 
-def resolve_week(books: Books, route: str, h: HiddenState, week: int, cfg: WorldConfig):
-    """Dispatch this week's order, move every in-flight ship one week,
-    land arrivals, consume demand. Returns (arrived_qty, cost_breakdown)."""
-    unit = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
-    books.pipeline.append(Shipment(cfg.order_qty, route, week))
-    shipping = cfg.order_qty * unit
+def resolve_week(books: Books, qty: int, route: str | None, h: HiddenState,
+                 week: int, cfg: WorldConfig):
+    """Dispatch this week's order (if any), move every in-flight ship one
+    week, land arrivals, consume demand. Returns (arrived_qty, cost_breakdown)."""
+    shipping = 0.0
+    if qty:
+        unit = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
+        books.pipeline.append(Shipment(qty, route, week))
+        shipping = qty * unit
 
     for s in books.pipeline:
         _advance(s, h, week, cfg)

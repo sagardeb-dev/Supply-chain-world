@@ -21,6 +21,7 @@ CAPE_LOCAL_EXTRA = 21           # iid local Cape-port congestion, cape channel o
 @dataclass(frozen=True)
 class WorldConfig:
     horizon_weeks: int = 26
+    semantics: str = "real"             # "real" | "anon" - presentation layer only (R3/R4)
 
     # --- event semi-Markov kernel (stochastic root #1) ---
     onset_prob: float = 0.08              # calm -> watch; ~2 threat episodes/half-year
@@ -46,10 +47,10 @@ class WorldConfig:
 
     # --- demand & costs ---
     weekly_demand: int = 20
-    order_qty: int = 20
+    order_quantities: tuple = (0, 20, 40)  # no order / one ship / two ships
     initial_inventory: int = 80
     suez_unit_cost: float = 4.0
     cape_unit_cost: float = 6.0           # ~1.5x Suez operating cost
     holding_cost: float = 1.0             # per unit per week, on-hand AND in-transit
     stockout_cost: float = 20.0           # scarcity premium (crisis rates 3-5x)
-    probe_cost: float = 30.0              # paid intelligence: regime + type, now
+    briefing_cost: float = 30.0           # paid analyst assessment, bought pre-decision

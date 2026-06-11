@@ -1,10 +1,10 @@
 """Clairvoyant oracle. The hidden trajectory is a function of the seed
 alone (actions never consume the rng), so the oracle replays the seed
 once to learn the entire future, then solves for the cost-minimizing
-route sequence exactly. It never probes: it already knows every regime
-and type. This is the luck-INCLUSIVE per-seed lower bound; the
-benchmark anchor (causal-aware oracle, optimal expected value with no
-future knowledge) comes next — see V1_CHANGE_LOG.md 2026-06-11 item 7."""
+(qty, route) sequence exactly. It never buys briefings: it already
+knows every regime and type. This is the luck-INCLUSIVE per-seed lower
+bound; the benchmark anchor (causal-aware oracle, optimal expected
+value with no future knowledge) comes next - see V1_CHANGE_LOG.md."""
 
 from functools import lru_cache
 
@@ -15,11 +15,11 @@ from .state import HiddenState
 
 def hidden_trajectory(seed: int, cfg: WorldConfig) -> list[HiddenState]:
     """Replay the seed to recover h_1..h_H. Action-independent, so one
-    fixed-route playthrough exposes the whole exogenous trajectory."""
+    no-op playthrough exposes the whole exogenous trajectory."""
     w = World(cfg)
     w.reset(seed)
     while not w.done:
-        w.step({"route": "suez", "probe": False})
+        w.step({"qty": 0})
     return [HiddenState(r["hidden"]["event_state"],
                         r["hidden"]["event_age"],
                         r["hidden"]["disruption_type"],
@@ -61,59 +61,67 @@ def arrival_week(route: str, dispatch: int, traj: list[HiddenState],
     return cw + 1 + (cfg.suez_total_weeks - cfg.suez_chokepoint_offset)
 
 
-def optimal_routes(trajectory: list[HiddenState], cfg: WorldConfig):
-    """Exact DP. State = (week, inventory, pending arrival weeks as a
-    sorted tuple). In-transit holding is charged up-front at dispatch
-    (qty x weeks-on-the-water, horizon-truncated), which sums to the same
-    total the engine charges weekly. Returns (min_cost, [route_per_week])."""
+def optimal_plan_for(trajectory: list[HiddenState], cfg: WorldConfig):
+    """Exact DP over (qty, route). State = (week, inventory, pending),
+    pending = sorted tuple of (arrival_week, qty) for in-flight orders.
+    In-transit holding is charged up-front at dispatch (qty x weeks on
+    the water, horizon-truncated), which sums to the same total the
+    engine charges weekly. Returns (min_cost, [(qty, route_or_None)])."""
     H = len(trajectory)
     arr = {(r, t): arrival_week(r, t, trajectory, cfg)
            for r in ("suez", "cape") for t in range(1, H + 1)}
+    actions = [(0, None)] + [(q, r) for q in cfg.order_quantities if q
+                             for r in ("suez", "cape")]
 
     @lru_cache(maxsize=None)
     def solve(week: int, inventory: int, pending: tuple) -> tuple:
         if week > H:
             return (0.0, ())
         best = None
-        for route in ("suez", "cape"):
-            a = arr[(route, week)]
-            unit = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
-            lands = a is not None and a <= H
-            transit_weeks = (a if lands else H + 1) - week
-            dispatch_cost = (cfg.order_qty * unit
-                             + cfg.holding_cost * cfg.order_qty * transit_weeks)
+        for qty, route in actions:
+            if qty:
+                a = arr[(route, week)]
+                unit = (cfg.suez_unit_cost if route == "suez"
+                        else cfg.cape_unit_cost)
+                lands = a is not None and a <= H
+                transit_weeks = (a if lands else H + 1) - week
+                dispatch_cost = (qty * unit
+                                 + cfg.holding_cost * qty * transit_weeks)
+            else:
+                lands, dispatch_cost = False, 0.0
 
             new_pending = list(pending)
-            if lands:
-                new_pending.append(a)
-            arrived = cfg.order_qty * sum(1 for x in new_pending if x == week)
-            new_pending = tuple(sorted(x for x in new_pending if x > week))
+            if qty and lands:
+                new_pending.append((a, qty))
+            arrived = sum(q for (x, q) in new_pending if x == week)
+            new_pending = tuple(sorted((x, q) for (x, q) in new_pending
+                                       if x > week))
 
             inv = inventory + arrived
             served = min(inv, cfg.weekly_demand)
             shortfall = cfg.weekly_demand - served
             inv -= served
 
-            step_cost = (dispatch_cost
-                         + cfg.holding_cost * inv
+            step_cost = (dispatch_cost + cfg.holding_cost * inv
                          + cfg.stockout_cost * shortfall)
-            future_cost, future_routes = solve(week + 1, inv, new_pending)
+            future_cost, future_plan = solve(week + 1, inv, new_pending)
             total = step_cost + future_cost
             if best is None or total < best[0]:
-                best = (total, (route,) + future_routes)
+                best = (total, ((qty, route),) + future_plan)
         return best
 
-    cost, routes = solve(1, cfg.initial_inventory, ())
-    return cost, list(routes)
+    cost, plan = solve(1, cfg.initial_inventory, ())
+    return cost, list(plan)
 
 
 def oracle_cost(seed: int, cfg: WorldConfig | None = None) -> float:
     cfg = cfg or WorldConfig()
-    cost, _ = optimal_routes(hidden_trajectory(seed, cfg), cfg)
+    cost, _ = optimal_plan_for(hidden_trajectory(seed, cfg), cfg)
     return cost
 
 
 def oracle_plan(seed: int, cfg: WorldConfig | None = None):
-    """(cost, routes) for inspection / replay against the live engine."""
+    """(cost, plan) - plan entries are (qty, route|None), replayable on
+    the live engine."""
     cfg = cfg or WorldConfig()
-    return optimal_routes(hidden_trajectory(seed, cfg), cfg)
+    return optimal_plan_for(hidden_trajectory(seed, cfg), cfg)

@@ -2,8 +2,10 @@
 
 Pins the properties the research depends on: seed-determinism, action
 exogeneity, no hidden-state leakage, the crash-week fingerprint
-ambiguity, transit-week voyage causality, in-transit holding,
-bookkeeping, the API boundary, and clairvoyant DP == engine replay.
+ambiguity (counts AND bulletin), transit-week voyage causality,
+in-transit holding, variable order quantity, the two-stage week
+(pre-decision briefing), the semantics ablation (real/anon), the API
+boundary, and clairvoyant DP == engine replay.
 """
 
 import pytest
@@ -11,21 +13,25 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.world import World, WorldConfig
-from src.world.emission import observe_counts, probe_result
+from src.world.emission import analyst_briefing, news_bulletin, observe_counts
 from src.world.engine import HIDDEN_KEYS
 from src.world.logistics import Books, resolve_week
 from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
+from src.world.semantics import BULLETINS
 from src.world.state import HiddenState
 
 CFG = WorldConfig()
 
 
-def run_episode(seed, routes=("suez",), probe=False):
+def run_episode(seed, routes=("suez",), qty=20):
     world = World()
     world.reset(seed)
     i = 0
     while not world.done:
-        world.step({"route": routes[i % len(routes)], "probe": probe})
+        if qty:
+            world.step({"qty": qty, "route": routes[i % len(routes)]})
+        else:
+            world.step({"qty": 0})
         i += 1
     return world
 
@@ -34,17 +40,18 @@ def counts(**kw):
     return tuple(observe_counts(HiddenState(**kw), CFG).values())
 
 
-def sail(weekly_hidden, routes=None):
+def sail(weekly_hidden, orders=None):
     """Drive Books through resolve_week with a scripted hidden sequence.
-    Returns (books, first_shipment, weekly_costs)."""
+    orders = [(qty, route)] per week, default (20, "suez").
+    Returns (books, first_week1_shipment_or_None, weekly_costs)."""
     books = Books(inventory=CFG.initial_inventory)
     first = None
     costs = []
     for week, h in enumerate(weekly_hidden, start=1):
-        route = routes[week - 1] if routes else "suez"
-        _, c = resolve_week(books, route, h, week, CFG)
+        qty, route = orders[week - 1] if orders else (20, "suez")
+        _, c = resolve_week(books, qty, route, h, week, CFG)
         if first is None:
-            first = next(s for s in books.pipeline if s.dispatched_week == 1)
+            first = next((s for s in books.pipeline if s.dispatched_week == 1), None)
         costs.append(c)
     return books, first, costs
 
@@ -60,8 +67,8 @@ def test_same_seed_same_trace():
 
 
 def test_actions_do_not_affect_hidden_trajectory():
-    a = run_episode(11)
-    b = run_episode(11, routes=("cape", "suez"), probe=True)
+    a = run_episode(11, qty=0)
+    b = run_episode(11, routes=("cape", "suez"), qty=40)
     assert [r["hidden"] for r in a.trace] == [r["hidden"] for r in b.trace]
 
 
@@ -92,18 +99,45 @@ def test_baseline_and_cape_local_fingerprints():
     assert crash_k == (28, 25, 87)  # K shifts cape only; ambiguity survives
 
 
-def test_probe_reveals_type_and_costs():
-    assert probe_result(HiddenState()) == "all_clear"
-    assert probe_result(HiddenState(event_state="watch")) == "elevated_risk"
-    assert probe_result(HiddenState(event_state="false_alarm")) == "false_alarm"
-    assert probe_result(SHORT) == "blockage_short_term"
-    assert probe_result(LONG) == "crisis_long_term"
-    assert probe_result(RECOV) == "recovering"
-    world = World()
-    world.reset(0)
-    obs, _, _, _ = world.step({"route": "suez", "probe": True})
-    assert obs["cost_breakdown"]["probe"] == CFG.probe_cost
-    assert obs["probe_result"] is not None
+def test_bulletin_crash_week_identical_across_causes():
+    crash_states = [
+        HiddenState("false_alarm", 0, None, False),
+        HiddenState("disruption", 0, "short", False),
+        HiddenState("disruption", 0, "long", False),
+    ]
+    for mode in ("real", "anon"):
+        mcfg = WorldConfig(semantics=mode)
+        texts = {news_bulletin(h, mcfg) for h in crash_states}
+        assert len(texts) == 1, f"crash bulletin must be identical in {mode}"
+
+
+def test_bulletin_separates_types_after_onset():
+    short = news_bulletin(HiddenState("disruption", 1, "short", False), CFG)
+    long_ = news_bulletin(HiddenState("disruption", 1, "long", False), CFG)
+    crash = news_bulletin(HiddenState("disruption", 0, "short", False), CFG)
+    assert short != long_ and short != crash and long_ != crash
+
+
+def test_briefing_reveals_type_at_crash_week():
+    fa = analyst_briefing(HiddenState("false_alarm", 0, None, False), CFG)
+    sh = analyst_briefing(HiddenState("disruption", 0, "short", False), CFG)
+    lo = analyst_briefing(HiddenState("disruption", 0, "long", False), CFG)
+    assert len({fa, sh, lo}) == 3  # briefing breaks the three-way ambiguity
+
+
+def test_no_duration_language_in_any_text():
+    # R2: duration words would let reading comprehension substitute for
+    # domain knowledge. Spot-banned vocabulary across every template.
+    banned = ("week", "month", "day", "year", "soon", "brief ", "extended",
+              "short", "long", "prolonged", "temporar", "indefinite",
+              "likely", "probab", "%")
+    from src.world.semantics import BRIEFINGS
+    for table in (BULLETINS, BRIEFINGS):
+        for mode in table:
+            for key, text in table[mode].items():
+                low = text.lower()
+                for w in banned:
+                    assert w not in low, f"{mode}/{key} leaks duration-ish word {w!r}"
 
 
 def test_suez_clean_passage():
@@ -132,16 +166,17 @@ def test_suez_queued_then_diverted():
 
 
 def test_cape_congestion_at_rounding_week():
-    _, clean, _ = sail([CALM] * 6, routes=["cape"] * 6)
+    cape6 = [(20, "cape")] * 6
+    _, clean, _ = sail([CALM] * 6, orders=cape6)
     assert clean.arrives_week == 5
     _, k, _ = sail([CALM, CALM, HiddenState(cape_local_congestion=True), CALM, CALM, CALM],
-                   routes=["cape"] * 6)
+                   orders=cape6)
     assert k.arrives_week == 6
     _, crisis, _ = sail([CALM, CALM, HiddenState("disruption", 1, "long"), CALM, CALM, CALM],
-                        routes=["cape"] * 6)
+                        orders=cape6)
     assert crisis.arrives_week == 6
     _, blockage, _ = sail([CALM, CALM, HiddenState("disruption", 1, "short"), CALM, CALM, CALM],
-                          routes=["cape"] * 6)
+                          orders=cape6)
     assert blockage.arrives_week == 5  # short blockage never congests the Cape
 
 
@@ -150,12 +185,27 @@ def test_in_transit_holding_charged():
     assert [c["in_transit"] for c in costs] == [20, 40, 60, 60]
 
 
+def test_qty_zero_dispatches_nothing():
+    books, first, costs = sail([CALM] * 4, orders=[(0, None)] * 4)
+    assert first is None and books.pipeline == []
+    assert all(c["shipping"] == 0 and c["in_transit"] == 0 for c in costs)
+    assert books.inventory == CFG.initial_inventory - 4 * CFG.weekly_demand
+
+
+def test_qty_forty_ships_forty():
+    books, first, costs = sail([CALM] * 5, orders=[(40, "suez")] + [(0, None)] * 4)
+    assert costs[0]["shipping"] == 40 * CFG.suez_unit_cost
+    assert costs[0]["in_transit"] == 40 * CFG.holding_cost
+    assert first.qty == 40 and first.arrives_week == 4
+    assert costs[3]["in_transit"] == 0  # the 40 landed at week 4
+
+
 def test_books_conservation_and_stockout_billing():
     world = World()
     world.reset(5)
     inv = CFG.initial_inventory
     while not world.done:
-        obs, _, _, _ = world.step({"route": "suez", "probe": False})
+        obs, _, _, _ = world.step({"qty": 20, "route": "suez"})
         served = min(inv + obs["arrived"], CFG.weekly_demand)
         assert obs["inventory"] == inv + obs["arrived"] - served
         shortfall = CFG.weekly_demand - served
@@ -165,11 +215,85 @@ def test_books_conservation_and_stockout_billing():
         inv = obs["inventory"]
 
 
+def test_briefing_describes_current_week_and_charges_once():
+    world = World()
+    world.reset(7)
+    # force a known CURRENT hidden state (pre-transition - R5)
+    world.hidden = HiddenState("disruption", 0, "long", False)
+    b1 = world.request_briefing()
+    b2 = world.request_briefing()
+    assert "security-crisis" in b1  # current state, type revealed
+    assert b1 == b2
+    obs, _, _, _ = world.step({"qty": 20, "route": "cape"})
+    assert obs["cost_breakdown"]["briefing"] == CFG.briefing_cost  # charged once
+    obs2, _, _, _ = world.step({"qty": 20, "route": "cape"})
+    assert "briefing" not in obs2["cost_breakdown"]  # flag cleared
+
+
+def test_step_validation():
+    world = World()
+    world.reset(1)
+    with pytest.raises(ValueError):
+        world.step({"qty": 30, "route": "suez"})
+    with pytest.raises(ValueError):
+        world.step({"qty": 20})  # qty > 0 needs a route
+    world.step({"qty": 0})       # no route needed
+
+
+def test_bulletin_present_and_matches_regime():
+    world = World()
+    obs = world.reset(1)
+    assert obs["bulletin"] == BULLETINS["real"]["calm"]
+    while not world.done:
+        obs, _, _, info = world.step({"qty": 20, "route": "suez"})
+        assert obs["bulletin"] == BULLETINS["real"][info["hidden"]["regime"]]
+
+
+FORBIDDEN_REAL_TOKENS = ("suez", "cape", "red sea", "bab", "houthi",
+                         "ever given", "grounded", "salvage", "good hope")
+
+
+def test_anon_mode_strips_real_entities():
+    acfg = WorldConfig(semantics="anon")
+    world = World(acfg)
+    world.reset(3)
+    blob = [str(world.trace[0]["obs"])]
+    while not world.done:
+        blob.append(world.request_briefing())
+        obs, *_ = world.step({"qty": 20, "route": "suez"})
+        blob.append(str(obs))
+    # guarantee full template coverage regardless of the seed's story
+    for h in (CALM, HiddenState("watch"), SHORT, LONG,
+              HiddenState("disruption", 1, "short"),
+              HiddenState("disruption", 1, "long"),
+              RECOV, HiddenState("false_alarm")):
+        blob.append(news_bulletin(h, acfg))
+        blob.append(analyst_briefing(h, acfg))
+    text = " ".join(blob).lower()
+    for tok in FORBIDDEN_REAL_TOKENS:
+        assert tok not in text, f"anon mode leaks {tok!r}"
+
+
+def test_anon_and_real_numbers_identical():
+    # R3: same seed, same actions -> identical numeric trajectory
+    wr = World(WorldConfig())
+    wa = World(WorldConfig(semantics="anon"))
+    wr.reset(3)
+    wa.reset(3)
+    while not wr.done:
+        or_, cr, *_ = wr.step({"qty": 20, "route": "suez"})
+        oa_, ca, *_ = wa.step({"qty": 20, "route": "suez"})
+        assert cr == ca
+        assert or_["inventory"] == oa_["inventory"]
+        assert or_["suez_count"] == oa_["waterway1_count"]
+        assert or_["cape_count"] == oa_["waterway2_count"]
+
+
 def test_termination():
     world = run_episode(1)
     assert world.week == CFG.horizon_weeks
     with pytest.raises(RuntimeError):
-        world.step({"route": "suez", "probe": False})
+        world.step({"qty": 20, "route": "suez"})
 
 
 def test_trace_completeness():
@@ -186,7 +310,7 @@ def test_oracle_arrivals_match_engine():
             world = World()
             world.reset(seed)
             while not world.done:
-                world.step({"route": route, "probe": False})
+                world.step({"qty": 20, "route": route})
             landed = {}
             for rec in world.trace[1:]:
                 for s in rec["obs"]["pipeline"]:
@@ -199,13 +323,20 @@ def test_oracle_arrivals_match_engine():
 
 def test_oracle_dp_matches_engine_replay():
     for seed in (1, 2, 7, 12, 17):
-        cost, routes = oracle_plan(seed, CFG)
+        cost, plan = oracle_plan(seed, CFG)
         world = World()
         world.reset(seed)
-        for r in routes:
-            world.step({"route": r, "probe": False})
+        for qty, route in plan:
+            world.step({"qty": qty, "route": route} if qty else {"qty": 0})
         assert world.done
-        assert abs(world.total_cost - cost) < 1e-6
+        assert abs(world.total_cost - cost) < 1e-6, f"seed {seed}"
+
+
+def test_oracle_uses_quantity_lever():
+    # With the 80-unit starting buffer and a 3-week lead, ordering 20
+    # every single week cannot be optimal - the oracle must burn buffer.
+    _, plan = oracle_plan(1, CFG)
+    assert any(q != 20 for q, _ in plan)
 
 
 def test_api_episode_lifecycle():
@@ -218,11 +349,13 @@ def test_api_episode_lifecycle():
 
     done = False
     while not done:
-        r = client.post(f"/episodes/{episode_id}/step", json={"route": "suez"})
+        r = client.post(f"/episodes/{episode_id}/step",
+                        json={"qty": 20, "route": "suez"})
         assert r.status_code == 200
         done = r.json()["done"]
 
-    assert client.post(f"/episodes/{episode_id}/step", json={"route": "suez"}).status_code == 409
+    assert client.post(f"/episodes/{episode_id}/step",
+                       json={"qty": 20, "route": "suez"}).status_code == 409
 
     r = client.get(f"/episodes/{episode_id}/trace")
     assert r.status_code == 200
@@ -230,4 +363,24 @@ def test_api_episode_lifecycle():
     assert len(body["trace"]) == CFG.horizon_weeks + 1
     assert "event_state" in body["trace"][0]["hidden"]
 
-    assert client.post("/episodes/nope/step", json={"route": "suez"}).status_code == 404
+    assert client.post("/episodes/nope/step",
+                       json={"qty": 20, "route": "suez"}).status_code == 404
+
+
+def test_api_briefing_and_anon_episode():
+    client = TestClient(app)
+    r = client.post("/episodes", json={"seed": 3, "semantics": "anon"})
+    assert r.status_code == 201
+    eid = r.json()["episode_id"]
+    obs = r.json()["obs"]
+    assert "waterway1_count" in obs and "suez_count" not in obs
+
+    b = client.post(f"/episodes/{eid}/briefing")
+    assert b.status_code == 200 and b.json()["cost"] == CFG.briefing_cost
+
+    # canonical name must be rejected in anon mode; anon name accepted
+    bad = client.post(f"/episodes/{eid}/step", json={"qty": 20, "route": "suez"})
+    assert bad.status_code == 422
+    ok = client.post(f"/episodes/{eid}/step", json={"qty": 20, "route": "route_1"})
+    assert ok.status_code == 200
+    assert ok.json()["obs"]["cost_breakdown"]["briefing"] == CFG.briefing_cost

@@ -1,60 +1,78 @@
-"""Cost sweep: oracle vs naive fixed-route baselines across seeds.
-Also self-checks that each oracle plan replays on the live engine to exactly
-the DP's predicted cost (the DP must agree with resolve_week)."""
+"""Cost sweep: clairvoyant oracle vs naive baselines across seeds.
+Baselines: always-20-via-suez, always-20-via-cape, base-stock
+(order-up-to 80, Suez). Self-checks that each oracle plan replays on
+the live engine to exactly the DP's predicted cost (the DP must agree
+with resolve_week)."""
 
 from src.world.config import WorldConfig
 from src.world.engine import World
 from src.world.oracle import oracle_plan
 
 
-def fixed_route_cost(seed: int, route: str, cfg: WorldConfig) -> float:
+def fixed_policy_cost(seed: int, route: str, cfg: WorldConfig) -> float:
     w = World(cfg)
     w.reset(seed)
     while not w.done:
-        w.step({"route": route, "probe": False})
+        w.step({"qty": 20, "route": route})
     return w.total_cost
 
 
-def replay_cost(seed: int, routes: list[str], cfg: WorldConfig) -> float:
+def base_stock_cost(seed: int, cfg: WorldConfig, target: int = 80) -> float:
+    """Order-up-to-target inventory position via Suez - the textbook
+    naive policy a competent non-adaptive planner would run.
+    target = demand x (suez lead + 1)."""
     w = World(cfg)
     w.reset(seed)
-    for r in routes:
-        w.step({"route": r, "probe": False})
+    while not w.done:
+        position = w.books.inventory + sum(s.qty for s in w.books.pipeline)
+        deficit = target - position
+        qty = 0 if deficit <= 0 else (20 if deficit <= 20 else 40)
+        w.step({"qty": qty, "route": "suez"} if qty else {"qty": 0})
+    return w.total_cost
+
+
+def replay_cost(seed: int, plan, cfg: WorldConfig) -> float:
+    w = World(cfg)
+    w.reset(seed)
+    for qty, route in plan:
+        w.step({"qty": qty, "route": route} if qty else {"qty": 0})
     return w.total_cost
 
 
 def main():
     cfg = WorldConfig()
     seeds = range(1, 21)
-    print(f"{'seed':>4} {'oracle':>8} {'suez':>8} {'cape':>8} "
+    print(f"{'seed':>4} {'oracle':>8} {'suez20':>8} {'cape20':>8} {'bstock':>8} "
           f"{'naive_min':>9} {'gap':>7} {'disrupt_wks':>11}")
     rows = []
     for seed in seeds:
-        cost, routes = oracle_plan(seed, cfg)
-        replayed = replay_cost(seed, routes, cfg)
+        cost, plan = oracle_plan(seed, cfg)
+        replayed = replay_cost(seed, plan, cfg)
         assert abs(replayed - cost) < 1e-6, (
             f"seed {seed}: DP cost {cost} != engine replay {replayed}")
-        suez = fixed_route_cost(seed, "suez", cfg)
-        cape = fixed_route_cost(seed, "cape", cfg)
-        naive_min = min(suez, cape)
+        suez = fixed_policy_cost(seed, "suez", cfg)
+        cape = fixed_policy_cost(seed, "cape", cfg)
+        bstock = base_stock_cost(seed, cfg)
+        naive_min = min(suez, cape, bstock)
         gap = naive_min - cost
 
-        w = World(cfg); w.reset(seed)
+        w = World(cfg)
+        w.reset(seed)
         while not w.done:
-            w.step({"route": "suez", "probe": False})
+            w.step({"qty": 0})
         disrupt_wks = sum(1 for r in w.trace[1:]
                           if r["hidden"]["event_state"] == "disruption")
 
-        rows.append((seed, cost, suez, cape, naive_min, gap, disrupt_wks))
-        print(f"{seed:>4} {cost:>8.0f} {suez:>8.0f} {cape:>8.0f} "
+        rows.append((seed, cost, suez, cape, bstock, naive_min, gap, disrupt_wks))
+        print(f"{seed:>4} {cost:>8.0f} {suez:>8.0f} {cape:>8.0f} {bstock:>8.0f} "
               f"{naive_min:>9.0f} {gap:>7.0f} {disrupt_wks:>11}")
 
-    gaps = [r[5] for r in rows]
+    gaps = [r[6] for r in rows]
     print(f"\ngap (naive_min - oracle): "
           f"min={min(gaps):.0f} max={max(gaps):.0f} "
           f"mean={sum(gaps)/len(gaps):.0f}")
     discriminative = sum(1 for g in gaps if g > 0)
-    print(f"seeds where adaptive routing beats both fixed policies: "
+    print(f"seeds where the oracle beats every naive policy: "
           f"{discriminative}/{len(rows)}")
 
 
