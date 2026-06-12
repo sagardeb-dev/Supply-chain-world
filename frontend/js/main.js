@@ -13,6 +13,8 @@ const state = {
   totalCost: 0,
   done: false,
   busy: false,
+  research: false,
+  seed: null,
 };
 
 async function guard(fn) {
@@ -31,12 +33,14 @@ async function guard(fn) {
 }
 
 const ui = new UI({
-  async onStart(seed, semantics) {
+  async onStart(seed, semantics, research) {
     if (!Number.isFinite(seed)) return ui.startError('seed must be a number');
     try {
-      const res = await api.createEpisode(seed, semantics);
+      const res = await api.createEpisode(seed, semantics, research);
       state.episodeId = res.episode_id;
       state.semantics = semantics;
+      state.research = research;
+      state.seed = seed;
       state.totalCost = 0;
       state.done = false;
       const labels = LABELS[semantics];

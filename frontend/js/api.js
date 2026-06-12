@@ -9,19 +9,19 @@ async function call(method, path, body) {
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) {
-    let detail = res.statusText;
-    try { detail = (await res.json()).detail ?? detail; } catch { /* not json */ }
-    throw new Error(`${res.status}: ${detail}`);
-  }
-  return res.json();
+  if (res.ok || res.status === 202) return res.json();
+  let detail = res.statusText;
+  try { detail = (await res.json()).detail ?? detail; } catch { /* not json */ }
+  throw new Error(`${res.status}: ${detail}`);
 }
 
 export const api = {
-  createEpisode: (seed, semantics) => call('POST', '/episodes', { seed, semantics }),
+  createEpisode: (seed, semantics, research) => call('POST', '/episodes', { seed, semantics, research_mode: research }),
   step: (id, qty, route) => call('POST', `/episodes/${id}/step`, { qty, route }),
   briefing: (id) => call('POST', `/episodes/${id}/briefing`),
   trace: (id) => call('GET', `/episodes/${id}/trace`),
+  xray: (id) => call('GET', `/episodes/${id}/xray`),
+  benchmark: (seed) => call('GET', `/benchmark/${seed}`),
 };
 
 // ---- semantics vocabulary -------------------------------------------------

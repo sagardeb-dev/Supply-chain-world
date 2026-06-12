@@ -88,6 +88,32 @@
        Watch the transit counts — when they crash, is it a false alarm, a grounding,
        or a war? Order via Suez or around the Cape, and decide when paid intel is
        worth $30.</p>
+    <details id="how-it-works">
+      <summary>how this world works</summary>
+      <div class="hiw-flow">
+        <div class="hiw-node stochastic">
+          <b>HIDDEN</b><span>disruption chain</span>
+          <em>(regime, age, type) · the only random draw · 1/week · seeded</em>
+        </div>
+        <div class="hiw-arrow">→</div>
+        <div class="hiw-node">
+          <b>EMISSION</b><span>counts + bulletin</span>
+          <em>pure function · crash week is 3-cause ambiguous</em>
+        </div>
+        <div class="hiw-arrow">→</div>
+        <div class="hiw-node">
+          <b>YOU</b><span>qty × route × briefing</span>
+          <em>actions can't move the hidden chain (exogenous)</em>
+        </div>
+        <div class="hiw-arrow">→</div>
+        <div class="hiw-node">
+          <b>LOGISTICS</b><span>ships + costs</span>
+          <em>pure function of (hidden, your orders)</em>
+        </div>
+      </div>
+      <div class="hiw-legend"><i class="stoch"></i>sampled weekly (seeded)<i class="det"></i>pure function</div>
+      <p class="hiw-api">agents play this exact HTTP API — POST /episodes · /briefing · /step · /trace</p>
+    </details>
     <div class="form-row">
       <label>seed <input id="inp-seed" type="number" value="7"></label>
       <label>semantics
@@ -95,6 +121,9 @@
           <option value="real">real (Suez / Red Sea)</option>
           <option value="anon">anon (Waterway One / Two)</option>
         </select>
+      </label>
+      <label class="check" title="X-ray: reveals the hidden tape live. Off for benchmark runs.">
+        research mode <input id="inp-research" type="checkbox">
       </label>
     </div>
     <div id="new-error" class="error hidden"></div>

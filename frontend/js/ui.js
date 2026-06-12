@@ -29,7 +29,7 @@ export class UI {
     $('btn-commit').addEventListener('click', () => handlers.onCommit(this.qty, this.route));
     $('btn-briefing').addEventListener('click', handlers.onBriefing);
     $('btn-start').addEventListener('click', () => handlers.onStart(
-      Number($('inp-seed').value), $('inp-semantics').value));
+      Number($('inp-seed').value), $('inp-semantics').value, $('inp-research').checked));
     $('btn-new-episode').addEventListener('click', () => this.showNewModal());
     $('btn-again').addEventListener('click', () => {
       $('modal-end').classList.add('hidden');
