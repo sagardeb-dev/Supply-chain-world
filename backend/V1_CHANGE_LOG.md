@@ -55,7 +55,34 @@ episode — unreachable, not merely unshown.
 Deferred: live belief strip (needs the belief tracker extracted from
 causal_play), agent trace-replay viewer, /benchmark gating.
 
-Verification results: (filled in at sign-off)
+Verification results (2026-06-12 sign-off):
+- 38/38 tests pass (162 s incl. the one oracle solve). Two new pins:
+  test_xray_gating_and_content (normal episode -> /xray 403; research
+  episode -> 200, tape grows per step, week-0 is calm; anon research
+  episode still serves canonical hidden keys), test_benchmark_endpoint
+  (causal >= clairvoyant, naive_min = min of the three baselines,
+  luck_premium = causal - clairvoyant, 26 plan rows, seed -1 -> 422;
+  the 122 s solve bypassed by injecting the module-scoped causal
+  fixture as the cached oracle).
+- Live end-to-end via Playwright against the running server:
+  * security boundary CONFIRMED live, not just in test: a non-research
+    episode's GET /xray returns 403; a research episode returns the
+    seed-3 hidden tape calm(age 0->3) -> watch(0) -> crash(0, short) ->
+    blockage(1, short). The age increments visibly inside calm — the
+    semi-Markov clock the rail is meant to teach.
+  * GET /benchmark/3 served the cached anchor set: clairvoyant 3300,
+    causal 3880, suez20 5000, cape20 6040, basestock 4280,
+    naive_min 4280, luck_premium 580, 26 plan rows — identical to the
+    report_oracle sweep, and the plan bought 0 briefings.
+  * Three screenshots captured: the start-modal world-structure diagram
+    (HIDDEN node amber = the only stochastic factor), the live X-ray
+    rail mid-disruption, and the end-modal regret scoreboard (four bars
+    clairvoyant < causal < you < naive, decomposition
+    skill $240 + luck $580, ghost strip with the zero-briefing caption).
+- Commits on dev: d1eb042 (docs), f9401a8 (api), 6f4b91c (tests),
+  61defcb (diagram), 597135d (rail), 4e5b0aa (scoreboard). main
+  untouched.
+
 
 ## 2026-06-11 (c) — Causal-aware oracle: the benchmark anchor
 
