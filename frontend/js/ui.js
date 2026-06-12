@@ -168,6 +168,55 @@ export class UI {
     $('modal-end').classList.remove('hidden');
   }
 
+  // The regret scoreboard: your cost between the clairvoyant lower bound
+  // and the best naive policy, anchored on the causal oracle. Decomposes
+  // your gap into skill (vs the oracle) and luck (oracle vs clairvoyant).
+  showBenchmark(data, yourCost) {
+    const board = $('scoreboard');
+    if (!data || data.status === 'solving') {
+      board.innerHTML = '<span class="dim">oracle solving — first run takes ~2 min…</span>';
+      return;
+    }
+    const rows = [
+      ['clairvoyant', data.clairvoyant, 'lower bound (sees the future)'],
+      ['causal oracle', data.causal, 'the anchor (best play without the future)'],
+      ['you', yourCost, ''],
+      ['best naive', data.naive_min, 'best fixed policy'],
+    ];
+    const max = Math.max(...rows.map(([, v]) => v));
+    board.innerHTML = rows.map(([label, v, note]) => `
+      <div class="bench-row ${label === 'you' ? 'you' : ''}">
+        <span class="bench-label">${label}</span>
+        <span class="bench-bar"><i style="width:${(v / max) * 100}%"></i></span>
+        <span class="bench-val">$${Math.round(v)}</span>
+        <span class="bench-note">${note}</span>
+      </div>`).join('');
+    const skill = Math.round(yourCost - data.causal);
+    const luck = Math.round(data.luck_premium);
+    board.innerHTML += `<div class="bench-decomp">your regret vs the oracle =
+      <b>$${skill}</b> (skill) · oracle − clairvoyant = <b>$${luck}</b> (luck premium)</div>`;
+
+    // the oracle's weekly plan, same seed — its own strip of cells
+    const strip = $('ghost-strip');
+    strip.innerHTML = '';
+    for (const r of data.plan) {
+      const marks = [];
+      if (r.briefed) marks.push('B');
+      if (r.qty) marks.push((r.route?.[0] ?? '?').toUpperCase());
+      const cell = document.createElement('div');
+      cell.className = 'wk ghost';
+      cell.innerHTML = `<span class="marks">${marks.join('')}</span>${r.week}`;
+      cell.title = `week ${r.week}: ` + (r.qty
+        ? `ordered ${r.qty} via ${r.route}` : 'held')
+        + (r.briefed ? ' · bought briefing' : '');
+      strip.appendChild(cell);
+    }
+    const briefs = data.plan.filter(r => r.briefed).length;
+    $('ghost-caption').textContent =
+      `the causal oracle's plan for seed ${data.seed} — it bought ${briefs} briefings`
+      + (briefs === 0 ? ' (the chokepoint leak is free information)' : '');
+  }
+
   // Live hidden tape for research-mode episodes. Revealed weeks show the
   // regime colour with the in-state age as a superscript; future weeks
   // stay neutral. Age is the semi-Markov clock — what makes duration

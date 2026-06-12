@@ -263,3 +263,25 @@ button.primary.big { width: 100%; margin-top: 18px; font-size: 15px; }
 }
 #xray-strip .wk .marks { position: absolute; top: 2px; font-size: 8px; letter-spacing: 0; }
 #xray-strip .wk.future { background: #16233a; color: var(--dim); }
+
+/* ---------- benchmark scoreboard + oracle ghost (end modal) ---------- */
+#scoreboard { margin-bottom: 6px; }
+.bench-row { display: grid; grid-template-columns: 92px 1fr 64px auto; align-items: center; gap: 8px; padding: 3px 0; font-size: 12px; }
+.bench-label { color: var(--dim); text-align: right; }
+.bench-row.you .bench-label { color: var(--text); font-weight: 700; }
+.bench-bar { height: 10px; background: #16233a; border-radius: 5px; overflow: hidden; }
+.bench-bar i { display: block; height: 100%; background: var(--accent); border-radius: 5px; }
+.bench-row.you .bench-bar i { background: var(--cape); }
+.bench-val { font-variant-numeric: tabular-nums; color: var(--text); }
+.bench-note { font-size: 10px; color: var(--dim); }
+.bench-decomp { margin-top: 8px; font-size: 12px; color: var(--dim); }
+.bench-decomp b { color: var(--text); }
+#ghost-strip { display: flex; gap: 2px; margin: 6px 0 4px; }
+#ghost-strip .wk {
+  flex: 1; height: 30px; border-radius: 3px; position: relative;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+  font-size: 9px; color: rgba(255,255,255,.7); padding-bottom: 2px;
+  background: #16233a;
+}
+#ghost-strip .wk .marks { position: absolute; top: 2px; font-size: 8px; color: var(--accent); }
+#ghost-caption { font-size: 11px; margin-bottom: 8px; }

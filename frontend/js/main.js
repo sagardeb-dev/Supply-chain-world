@@ -17,6 +17,23 @@ const state = {
   seed: null,
 };
 
+// The oracle solves lazily server-side (~2 min on first request, then
+// cached). Poll until ready and fill the scoreboard in progressively;
+// the reveal never blocks on it.
+async function pollBenchmark(seed, yourCost, tries = 0) {
+  try {
+    const data = await api.benchmark(seed);
+    if (data.status === 'solving' && tries < 40) {
+      ui.showBenchmark(null, yourCost);
+      setTimeout(() => pollBenchmark(seed, yourCost, tries + 1), 5000);
+      return;
+    }
+    ui.showBenchmark(data, yourCost);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
 async function guard(fn) {
   if (state.busy) return;
   state.busy = true;
@@ -77,10 +94,13 @@ const ui = new UI({
       ui.updateRail((await api.xray(state.episodeId)).weeks, HORIZON);
     }
     if (res.done) {
+      const finalCost = state.totalCost;
+      const seed = state.seed;
       // let the final sail-in play out before the reveal
       setTimeout(async () => {
         const trace = await api.trace(state.episodeId);
         ui.showEnd(trace);
+        pollBenchmark(seed, finalCost);
       }, 1600);
     }
   }),
