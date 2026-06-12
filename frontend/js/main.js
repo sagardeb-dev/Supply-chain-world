@@ -49,6 +49,10 @@ const ui = new UI({
       const obs = normalizeObs(res.obs, semantics);
       scene.reset(obs);
       ui.update(obs, 0, HORIZON);
+      if (research) {
+        document.getElementById('xray-rail')?.classList.remove('hidden');
+        ui.updateRail((await api.xray(state.episodeId)).weeks, HORIZON);
+      }
     } catch (err) {
       ui.startError(err.message.includes('fetch')
         ? 'backend unreachable — is uvicorn running?' : err.message);
@@ -69,6 +73,9 @@ const ui = new UI({
     const obs = normalizeObs(res.obs, state.semantics);
     scene.applyObs(obs);
     ui.update(obs, state.totalCost, HORIZON);
+    if (state.research) {
+      ui.updateRail((await api.xray(state.episodeId)).weeks, HORIZON);
+    }
     if (res.done) {
       // let the final sail-in play out before the reveal
       setTimeout(async () => {

@@ -252,3 +252,14 @@ button.primary.big { width: 100%; margin-top: 18px; font-size: 15px; }
 .hiw-legend i.det { background: var(--panel-border); margin-left: 12px; }
 .hiw-api { font-size: 10px; color: var(--cape); letter-spacing: .02em; margin-top: 4px; }
 .form-row label.check { flex-direction: row; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; color: var(--text); font-size: 12px; white-space: nowrap; align-self: flex-end; padding-bottom: 8px; }
+
+/* ---------- x-ray hidden-tape rail (research mode) ---------- */
+#xray-rail { top: 64px; left: 50%; transform: translateX(-50%); width: 560px; padding: 10px 14px; }
+#xray-strip { display: flex; gap: 2px; }
+#xray-strip .wk {
+  flex: 1; height: 34px; border-radius: 3px; position: relative;
+  display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+  font-size: 9px; color: rgba(255,255,255,.85); padding-bottom: 2px;
+}
+#xray-strip .wk .marks { position: absolute; top: 2px; font-size: 8px; letter-spacing: 0; }
+#xray-strip .wk.future { background: #16233a; color: var(--dim); }
