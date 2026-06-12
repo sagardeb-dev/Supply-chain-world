@@ -3,6 +3,60 @@
 Design decisions for the supply-chain POMDP world. Each entry records what
 changed, why, and the evidence. Code follows this file, never the reverse.
 
+## 2026-06-12 — Research surface: read-only API + explainer UI
+
+### Problem
+
+The frontend is a faithful play client but says nothing about what the
+project IS: no statement that the disruption regime is the single hidden
+semi-Markov factor (regime, age), no visual distinction between the one
+RNG draw per week (transition.step_hidden) and the pure-function
+everything-else, no oracle, no regret. A visitor concludes "shipping
+game", not "exact-oracle POMDP benchmark". Separately, the agent door
+must stay open: agents will play the same HTTP API, so any UI that
+reveals hidden state live must be impossible to reach from a benchmark
+episode — unreachable, not merely unshown.
+
+### Decisions
+
+1. **The research surface is read-only.** No engine change. New API
+   endpoints serve only what world.trace and the oracle machinery
+   already compute. The world dynamics, observation channels, and action
+   space are untouched.
+2. **X-ray access is gated at episode creation.** ResetRequest gains
+   research_mode: bool = False. GET /episodes/{id}/xray returns the
+   hidden trajectory SO FAR (week, event_state, age, disruption_type,
+   regime) and responds 403 for non-research episodes. Rationale: the
+   gate is a property of the episode, set before the first observation,
+   so an agent harness physically cannot peek mid-episode. The
+   post-episode /trace reveal stays available to all episodes (existing
+   behavior, an analysis-side artifact).
+3. **GET /benchmark/{seed}** returns the anchor set for a seed:
+   clairvoyant, causal, suez20, cape20, basestock, naive_min, the luck
+   premium (causal - clairvoyant), and the causal oracle's weekly plan
+   rows (week, briefed, qty, route, belief_support, cost). The causal
+   oracle solves lazily in a background thread on first request (~122 s,
+   once per process) and is cached; while solving the endpoint returns
+   202 {status: "solving"}. NOTE: this endpoint reveals seed-level
+   structure (disruption weeks via the plan), so an agent harness must
+   not expose it to agents; creation-time gating of /benchmark is
+   deferred until the harness exists.
+4. **Every UI element maps 1:1 to an engine object** (the anti-slop
+   rule). The start-modal diagram's nodes are the actual modules —
+   hidden chain (the ONLY stochastic call, seeded), emission (pure
+   function, crash week 3-cause ambiguous by R1), actions (exogenous),
+   logistics (pure function). The X-ray rail renders (regime, age) per
+   week — age made visible because duration-in-state is what carries
+   the temporal information. The end-of-episode scoreboard renders the
+   paper's regret decomposition: agent - causal = skill deficit,
+   causal - clairvoyant = luck premium. The oracle ghost strip renders
+   causal_play's weekly plan. No element without a referent.
+
+Deferred: live belief strip (needs the belief tracker extracted from
+causal_play), agent trace-replay viewer, /benchmark gating.
+
+Verification results: (filled in at sign-off)
+
 ## 2026-06-11 (c) — Causal-aware oracle: the benchmark anchor
 
 ### Problem
