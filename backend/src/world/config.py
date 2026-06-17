@@ -87,6 +87,10 @@ class WorldConfig:
     contract_weeks: int = 8               # ~3 renewal events per 26-wk horizon
     contract_otif_floor: int = 85         # penalty clause threshold (R5)
     contract_break_fee: float = 10.0      # early-exit cost (irreversibility teeth)
+    # Lever 3: weekly overhead for carrying >=2 live contracts (managing two
+    # supplier relationships). The ONLY thing authored for dual-sourcing; the
+    # STRATEGY emerges as the agent's response to this vs spot's volatility.
+    dual_source_overhead: float = 4.0
     # The cost COUPLING knob (Becker JV term): a spot shortfall during a
     # disruption-active week is back-ordered at the crisis spot rate. Set to
     # 3x the stockout cost so gambling on spot when the Red Sea is twitchy is

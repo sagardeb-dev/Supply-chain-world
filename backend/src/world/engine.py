@@ -158,6 +158,12 @@ class World:
             self.week, self.cfg)
         if briefed:
             costs["briefing"] = self.cfg.briefing_cost
+        # Lever 3: carrying >=2 live contracts costs a weekly overhead. Counted
+        # AFTER the kernel step so a contract whose supplier just died this week
+        # no longer counts (it is now open).
+        live = len(self._contracted_suppliers())
+        if live >= 2:
+            costs["dual_source"] = self.cfg.dual_source_overhead
 
         cost = float(sum(costs.values()))
         self.total_cost += cost

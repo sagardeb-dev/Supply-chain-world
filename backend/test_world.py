@@ -1202,3 +1202,44 @@ def test_obs_offers_term_menu_at_open():
     w = World()
     obs0 = w.reset(3)
     assert set(obs0["term_menu"]) == {"short", "long", "strict", "lenient"}
+
+
+# --- R6: dual-source overhead (Lever 3) + the hard-gap ----------------------
+
+def test_single_contract_has_no_dual_source_overhead():
+    """One live contract (the evergreen incumbent) => no overhead charged."""
+    w = World()
+    w.reset(3)
+    _, costs, *_ = w.step({"qty": 20, "supplier": "qualified", "route": "suez"})
+    # cost_breakdown is in the obs; dual_source absent or zero with one contract
+    obs = w.trace[-1]["obs"]
+    assert obs["cost_breakdown"].get("dual_source", 0.0) == 0.0
+
+
+def test_two_live_contracts_incur_dual_source_overhead():
+    """Signing a second (spot) contract alongside the incumbent => the weekly
+    dual_source_overhead is charged. The cost gradient that makes hedging a
+    real trade-off."""
+    w = World()
+    w.reset(3)
+    w.step({"qty": 0, "contract": {"action": "sign", "supplier": "spot"}})
+    _, costs, *_ = w.step({"qty": 20, "supplier": "qualified", "route": "suez"})
+    obs = w.trace[-1]["obs"]
+    assert obs["cost_breakdown"]["dual_source"] == CFG.dual_source_overhead
+
+
+def test_hard_gap_defunct_spot_leaves_you_stuck():
+    """Locked decision (hard gap): when an exclusive spot supplier dies, you
+    are STUCK -- you cannot even source it (its contract is now open), and
+    backup needs onboarding. No scramble. The punishment is the absence of an
+    escape hatch; proven from R2 (defunct) x R4 (the mask), not coded."""
+    w = World()
+    w.reset(3)
+    w.step({"qty": 0, "contract": {"action": "sign", "supplier": "spot"}})
+    w.suppliers["spot"] = SupplierState(rel_state="defunct")
+    # a dead spot is no longer contractable: sourcing it raises (the hard gap).
+    with pytest.raises(ValueError):
+        w.step({"qty": 40, "supplier": "spot", "route": "suez"})
+    # and even a renew cannot make a dead supplier sourceable this week
+    w.suppliers["spot"] = SupplierState(rel_state="defunct")
+    assert "spot" not in w._contracted_suppliers()
