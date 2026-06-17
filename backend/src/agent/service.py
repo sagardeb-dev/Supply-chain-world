@@ -16,15 +16,21 @@ def svc_briefing(world) -> dict:
     return {"briefing": world.request_briefing(), "cost": world.cfg.briefing_cost}
 
 
-def svc_step(world, qty: int, route: str | None) -> dict:
-    """Commit this week's order and advance one week. `route` is canonical
-    ("suez"|"cape") or None; required iff qty>0. The hidden-state `info`
-    from the engine is dropped here and never returned."""
+def svc_step(world, qty: int, route: str | None,
+             supplier: str | None = None) -> dict:
+    """Commit this week's order and advance one week. `route` and `supplier`
+    are canonical or None; both required iff qty>0 (no fallback). The
+    hidden-state `info` from the engine is dropped here and never returned."""
     if world.done:
         raise RuntimeError("episode is done")
     if qty not in world.cfg.order_quantities:
         raise ValueError(f"qty must be one of {world.cfg.order_quantities}")
     if qty and route not in ("suez", "cape"):
         raise ValueError(f"qty {qty} needs route suez or cape, got {route!r}")
-    obs, cost, done, _info = world.step({"qty": qty, "route": route if qty else None})
+    if qty and supplier not in ("qualified", "spot"):
+        raise ValueError(
+            f"qty {qty} needs supplier qualified or spot, got {supplier!r}")
+    obs, cost, done, _info = world.step(
+        {"qty": qty, "route": route if qty else None,
+         "supplier": supplier if qty else None})
     return {"obs": obs, "cost": cost, "done": done}

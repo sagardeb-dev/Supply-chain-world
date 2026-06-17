@@ -37,7 +37,8 @@ def run_episode(seed, routes=("suez",), qty=20):
     i = 0
     while not world.done:
         if qty:
-            world.step({"qty": qty, "route": routes[i % len(routes)]})
+            world.step({"qty": qty, "supplier": "qualified",
+                        "route": routes[i % len(routes)]})
         else:
             world.step({"qty": 0})
         i += 1
@@ -237,7 +238,7 @@ def test_books_conservation_and_stockout_billing():
     world.reset(5)
     inv = CFG.initial_inventory
     while not world.done:
-        obs, _, _, _ = world.step({"qty": 20, "route": "suez"})
+        obs, _, _, _ = world.step({"qty": 20, "supplier": "qualified", "route": "suez"})
         served = min(inv + obs["arrived"], CFG.weekly_demand)
         assert obs["inventory"] == inv + obs["arrived"] - served
         shortfall = CFG.weekly_demand - served
@@ -256,9 +257,9 @@ def test_briefing_describes_current_week_and_charges_once():
     b2 = world.request_briefing()
     assert "security-crisis" in b1  # current state, type revealed
     assert b1 == b2
-    obs, _, _, _ = world.step({"qty": 20, "route": "cape"})
+    obs, _, _, _ = world.step({"qty": 20, "supplier": "qualified", "route": "cape"})
     assert obs["cost_breakdown"]["briefing"] == CFG.briefing_cost  # charged once
-    obs2, _, _, _ = world.step({"qty": 20, "route": "cape"})
+    obs2, _, _, _ = world.step({"qty": 20, "supplier": "qualified", "route": "cape"})
     assert "briefing" not in obs2["cost_breakdown"]  # flag cleared
 
 
@@ -277,7 +278,7 @@ def test_bulletin_present_and_matches_regime():
     obs = world.reset(1)
     assert obs["bulletin"] == BULLETINS["real"]["calm"]
     while not world.done:
-        obs, _, _, info = world.step({"qty": 20, "route": "suez"})
+        obs, _, _, info = world.step({"qty": 20, "supplier": "qualified", "route": "suez"})
         assert obs["bulletin"] == BULLETINS["real"][info["hidden"]["regime"]]
 
 
@@ -292,7 +293,7 @@ def test_anon_mode_strips_real_entities():
     blob = [str(world.trace[0]["obs"])]
     while not world.done:
         blob.append(world.request_briefing())
-        obs, *_ = world.step({"qty": 20, "route": "suez"})
+        obs, *_ = world.step({"qty": 20, "supplier": "qualified", "route": "suez"})
         blob.append(str(obs))
     # guarantee full template coverage regardless of the seed's story
     for h in (CALM, HiddenState("watch"), SHORT, LONG,
@@ -313,8 +314,8 @@ def test_anon_and_real_numbers_identical():
     wr.reset(3)
     wa.reset(3)
     while not wr.done:
-        or_, cr, *_ = wr.step({"qty": 20, "route": "suez"})
-        oa_, ca, *_ = wa.step({"qty": 20, "route": "suez"})
+        or_, cr, *_ = wr.step({"qty": 20, "supplier": "qualified", "route": "suez"})
+        oa_, ca, *_ = wa.step({"qty": 20, "supplier": "qualified", "route": "suez"})
         assert cr == ca
         assert or_["inventory"] == oa_["inventory"]
         assert or_["suez_count"] == oa_["waterway1_count"]
@@ -325,7 +326,7 @@ def test_termination():
     world = run_episode(1)
     assert world.week == CFG.horizon_weeks
     with pytest.raises(RuntimeError):
-        world.step({"qty": 20, "route": "suez"})
+        world.step({"qty": 20, "supplier": "qualified", "route": "suez"})
 
 
 def test_trace_completeness():
@@ -342,7 +343,7 @@ def test_oracle_arrivals_match_engine():
             world = World()
             world.reset(seed)
             while not world.done:
-                world.step({"qty": 20, "route": route})
+                world.step({"qty": 20, "supplier": "qualified", "route": route})
             landed = {}
             for rec in world.trace[1:]:
                 for s in rec["obs"]["pipeline"]:
@@ -359,7 +360,8 @@ def test_oracle_dp_matches_engine_replay():
         world = World()
         world.reset(seed)
         for qty, route in plan:
-            world.step({"qty": qty, "route": route} if qty else {"qty": 0})
+            world.step({"qty": qty, "supplier": "qualified", "route": route}
+                       if qty else {"qty": 0})
         assert world.done
         assert abs(world.total_cost - cost) < 1e-6, f"seed {seed}"
 
@@ -382,12 +384,12 @@ def test_api_episode_lifecycle():
     done = False
     while not done:
         r = client.post(f"/episodes/{episode_id}/step",
-                        json={"qty": 20, "route": "suez"})
+                        json={"qty": 20, "supplier": "qualified", "route": "suez"})
         assert r.status_code == 200
         done = r.json()["done"]
 
     assert client.post(f"/episodes/{episode_id}/step",
-                       json={"qty": 20, "route": "suez"}).status_code == 409
+                       json={"qty": 20, "supplier": "qualified", "route": "suez"}).status_code == 409
 
     r = client.get(f"/episodes/{episode_id}/trace")
     assert r.status_code == 200
@@ -396,7 +398,7 @@ def test_api_episode_lifecycle():
     assert "event_state" in body["trace"][0]["hidden"]
 
     assert client.post("/episodes/nope/step",
-                       json={"qty": 20, "route": "suez"}).status_code == 404
+                       json={"qty": 20, "supplier": "qualified", "route": "suez"}).status_code == 404
 
 
 def test_api_briefing_and_anon_episode():
@@ -413,7 +415,7 @@ def test_api_briefing_and_anon_episode():
     # canonical name must be rejected in anon mode; anon name accepted
     bad = client.post(f"/episodes/{eid}/step", json={"qty": 20, "route": "suez"})
     assert bad.status_code == 422
-    ok = client.post(f"/episodes/{eid}/step", json={"qty": 20, "route": "route_1"})
+    ok = client.post(f"/episodes/{eid}/step", json={"qty": 20, "supplier": "source_a", "route": "route_1"})
     assert ok.status_code == 200
     assert ok.json()["obs"]["cost_breakdown"]["briefing"] == CFG.briefing_cost
 
@@ -505,7 +507,7 @@ def test_xray_gating_and_content():
     assert len(wk0) == 1
     assert wk0[0]["event_state"] == "calm"
     assert "event_age" in wk0[0] and "disruption_type" in wk0[0]
-    client.post(f"/episodes/{rid}/step", json={"qty": 20, "route": "suez"})
+    client.post(f"/episodes/{rid}/step", json={"qty": 20, "supplier": "qualified", "route": "suez"})
     assert len(client.get(f"/episodes/{rid}/xray").json()["weeks"]) == 2
 
     # anon research episode: hidden state stays canonical at /xray
@@ -544,8 +546,9 @@ def test_service_parity():
     b = World(); b.reset(3)
     # direct vs service, same scripted orders
     for qty, route in [(20, "suez"), (0, None), (40, "cape")]:
-        oa, ca, da, _ = a.step({"qty": qty, "route": route})
-        rb = svc_step(b, qty, route)
+        sup = "qualified" if qty else None
+        oa, ca, da, _ = a.step({"qty": qty, "route": route, "supplier": sup})
+        rb = svc_step(b, qty, route, sup)
         assert rb["obs"] == oa and rb["cost"] == ca and rb["done"] == da
     # svc_observation reads the current obs (matches the trace tail)
     assert svc_observation(b) == b.trace[-1]["obs"]
@@ -575,11 +578,11 @@ def test_agent_tools_gating():
 
     # qty>0 with no route raises (no default route)
     with pytest.raises(Exception):
-        place_order.invoke({"qty": 20, "route": ""})
+        place_order.invoke({"qty": 20, "supplier": "qualified", "route": ""})
 
     # a valid order advances the world one week and records the event
     before = run.world.week
-    out = place_order.invoke({"qty": 20, "route": "suez"})
+    out = place_order.invoke({"qty": 20, "supplier": "qualified", "route": "suez"})
     assert run.world.week == before + 1
     assert "Order placed" in out
     assert any(k == "place_order" for _, k in run.events)
@@ -594,20 +597,20 @@ def test_resume_roundtrip(tmp_path, monkeypatch):
 
     run = AgentRun("test-run", seed=3, model_slug="x", mode="autonomous")
     # advance the World two weeks through the same path the tools use
-    run.world.step({"qty": 20, "route": "suez"})
+    run.world.step({"qty": 20, "supplier": "qualified", "route": "suez"})
     run.world.step({"qty": 0, "route": None})
     run.save()
 
     # a reference World driven identically, NOT pickled
     ref = AgentRun("ref-run", seed=3, model_slug="x", mode="autonomous")
-    ref.world.step({"qty": 20, "route": "suez"})
+    ref.world.step({"qty": 20, "supplier": "qualified", "route": "suez"})
     ref.world.step({"qty": 0, "route": None})
 
     loaded = AgentRun.load("test-run")
     assert loaded.seed == 3 and loaded.mode == "autonomous"
     # same next action -> identical obs/cost/done (rng restored exactly)
-    o1, c1, d1, _ = loaded.world.step({"qty": 40, "route": "cape"})
-    o2, c2, d2, _ = ref.world.step({"qty": 40, "route": "cape"})
+    o1, c1, d1, _ = loaded.world.step({"qty": 40, "supplier": "qualified", "route": "cape"})
+    o2, c2, d2, _ = ref.world.step({"qty": 40, "supplier": "qualified", "route": "cape"})
     assert o1 == o2 and c1 == c2 and d1 == d2
 
 
@@ -626,7 +629,7 @@ def test_agent_sse_mock(monkeypatch):
             yield ("updates", {"agent": {"messages": [
                 AIMessage(content="", tool_calls=[
                     {"id": "c1", "name": "place_order",
-                     "args": {"qty": 20, "route": "suez"}}])]}})
+                     "args": {"qty": 20, "supplier": "qualified", "route": "suez"}}])]}})
             # the tool result (updates mode)
             yield ("updates", {"tools": {"messages": [
                 ToolMessage(content="Order placed", name="place_order",
@@ -686,7 +689,7 @@ def test_place_order_event_carries_obs(tmp_path, monkeypatch):
     run = AgentRun("po-run", seed=3, model_slug="x", mode="autonomous",
                    semantics="real")
     get_week, buy_briefing, place_order = make_tools(run)
-    place_order.invoke({"qty": 20, "route": "suez"})
+    place_order.invoke({"qty": 20, "supplier": "qualified", "route": "suez"})
     assert run.recorder and run.recorder[-1]["kind"] == "place_order"
 
     # a scripted agent that emits a get_week tool_result then a place_order
@@ -919,3 +922,56 @@ def test_couple_no_surcharge_for_qualified_or_full_spot():
     _, cs = resolve_week(books_s, 40, "spot", "suez", CRISIS,
                          SupplierState(), 1, CFG)  # reliable spot ships full
     assert cs.get("couple", 0.0) == 0.0
+
+
+
+# --- T6: engine wires the supplier factor ---------------------------------
+
+def _spot_episode(seed, qty=20, route="suez"):
+    """Drive an episode sourcing spot every week."""
+    world = World()
+    world.reset(seed)
+    while not world.done:
+        if qty:
+            world.step({"qty": qty, "supplier": "spot", "route": route})
+        else:
+            world.step({"qty": 0})
+    return world
+
+
+def test_step_accepts_supplier_and_emits_scorecard():
+    world = World()
+    obs0 = world.reset(3)
+    assert "suppliers" in obs0  # scorecard present from week 0
+    ids = {s["id"] for s in obs0["suppliers"]}
+    assert ids == {"qualified", "spot"}
+    obs, _, _, _ = world.step({"qty": 20, "supplier": "spot", "route": "suez"})
+    assert "suppliers" in obs
+
+
+def test_qty_without_supplier_raises():
+    """No fallback: an order with qty>0 must name a supplier (like route)."""
+    world = World()
+    world.reset(3)
+    import pytest
+    with pytest.raises((ValueError, KeyError)):
+        world.step({"qty": 20, "route": "suez"})  # missing supplier
+
+
+def test_supplier_internals_never_leak():
+    """The scorecard is the only supplier surface; rel_state/rel_age/regime
+    never appear in any obs (extends the disruption leak gate)."""
+    for rec in _spot_episode(3).trace:
+        assert not (HIDDEN_KEYS & rec["obs"].keys())
+
+
+def test_supplier_action_does_not_perturb_either_hidden_trajectory():
+    """Exogeneity: the supplier CHOICE never changes the disruption OR the
+    supplier reliability trajectory (both are seed-only functions)."""
+    a = _spot_episode(11, qty=0)             # never orders
+    b = _spot_episode(11, qty=40)            # orders spot every week
+    assert [r["hidden"] for r in a.trace] == [r["hidden"] for r in b.trace]
+
+
+def test_same_seed_same_two_factor_trace():
+    assert _spot_episode(7).trace == _spot_episode(7).trace

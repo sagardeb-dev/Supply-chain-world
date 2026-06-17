@@ -40,19 +40,21 @@ def make_tools(run):
         return f"Analyst briefing (cost {r['cost']}): {r['briefing']}"
 
     @tool
-    def place_order(qty: int, route: str = "") -> str:
+    def place_order(qty: int, route: str = "", supplier: str = "qualified") -> str:
         """Place exactly one order this week and advance the world one week.
         qty must be 0, 20, or 40. If qty > 0 you MUST pass route "suez" or
-        "cape". Returns the new week's situation report and whether the
-        episode is finished."""
+        "cape" and a supplier ("qualified" or "spot"; defaults to qualified).
+        Returns the new week's situation report and whether the episode is
+        finished."""
         canonical = route if route else None
-        r = svc_step(run.world, qty, canonical)  # raises on bad qty/route — no fallback
+        sup = supplier if qty else None
+        r = svc_step(run.world, qty, canonical, sup)  # raises on bad inputs — no fallback
         obs = r["obs"]
         run.record(obs.get("week"), "place_order",
-                   {"qty": qty, "route": canonical, "cost": r["cost"],
-                    "done": r["done"], "obs": obs})
+                   {"qty": qty, "route": canonical, "supplier": sup,
+                    "cost": r["cost"], "done": r["done"], "obs": obs})
         tail = "  EPISODE DONE." if r["done"] else ""
-        return (f"Order placed: qty={qty} route={canonical}. "
+        return (f"Order placed: qty={qty} route={canonical} supplier={sup}. "
                 f"Week cost {r['cost']}.{tail}\nNew situation:\n{_obs_text(obs)}")
 
     return [get_week, buy_briefing, place_order]

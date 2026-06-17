@@ -333,8 +333,10 @@ def causal_play(seed: int, cfg: WorldConfig | None = None,
             _, qty, route = oracle.decide(week, belief, inv, pipe)
 
         groups = oracle._chance_groups(week, belief, inv, pipe, qty, route)
+        # ponytail: oracle sources qualified until T7 adds the supplier choice.
         obs, cost, done, _info = w.step(
-            {"qty": qty, "route": route} if qty else {"qty": 0})
+            {"qty": qty, "route": route, "supplier": "qualified"}
+            if qty else {"qty": 0})
 
         regime = _SUEZ_TO_REGIME[obs["suez_count"]]
         obs_pipe = _pipe_from_obs(obs, cfg)

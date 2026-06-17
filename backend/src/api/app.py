@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from src.world import World, WorldConfig
 from src.world.causal_oracle import CausalOracle, causal_play
 from src.world.oracle import oracle_plan
-from src.world.semantics import ROUTE_PARSE
+from src.world.semantics import ROUTE_PARSE, SUPPLIER_PARSE
 from src.agent.service import svc_briefing, svc_step
 from report_oracle import fixed_policy_cost, base_stock_cost
 
@@ -65,6 +65,7 @@ class ResetResponse(BaseModel):
 class ActionRequest(BaseModel):
     qty: Literal[0, 20, 40]
     route: str | None = None  # vocabulary depends on episode semantics
+    supplier: str | None = None  # qualified|spot (or anon source_a|source_b)
 
 
 class StepResponse(BaseModel):
@@ -111,13 +112,17 @@ def step_episode(episode_id: str, action: ActionRequest) -> StepResponse:
     world = _get(episode_id)
     if world.done:
         raise HTTPException(status.HTTP_409_CONFLICT, "episode is done")
-    route = None
+    route = supplier = None
     if action.qty:
         route = ROUTE_PARSE[world.cfg.semantics].get(action.route or "")
         if route is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 f"unknown route {action.route!r} for this episode")
-    r = svc_step(world, action.qty, route)
+        supplier = SUPPLIER_PARSE[world.cfg.semantics].get(action.supplier or "")
+        if supplier is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"unknown supplier {action.supplier!r} for this episode")
+    r = svc_step(world, action.qty, route, supplier)
     return StepResponse(obs=r["obs"], cost=r["cost"], done=r["done"])
 
 

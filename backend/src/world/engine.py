@@ -7,15 +7,18 @@ only in _build_obs (R4)."""
 import random
 
 from .config import WorldConfig
-from .emission import analyst_briefing, news_bulletin, observe_counts
+from .emission import (analyst_briefing, news_bulletin, observe_counts,
+                       observe_scorecard)
 from .logistics import Books, resolve_week
 from .state import SupplierState
-from .semantics import COUNT_KEYS, ROUTE_DISPLAY, STATUS_DISPLAY
+from .semantics import (COUNT_KEYS, ROUTE_DISPLAY, STATUS_DISPLAY,
+                        SUPPLIER_DISPLAY)
 from .state import HiddenState
-from .transition import step_hidden
+from .transition import step_hidden, step_supplier
 
 HIDDEN_KEYS = {"event_state", "event_age", "disruption_type",
-               "cape_local_congestion", "regime", "canal_blocked"}
+               "cape_local_congestion", "regime", "canal_blocked",
+               "rel_state", "rel_age"}  # supplier factor internals
 
 
 class World:
@@ -26,6 +29,7 @@ class World:
         self.rng = random.Random(seed)
         self.week = 0
         self.hidden = HiddenState()
+        self.supplier = SupplierState()  # second latent factor
         self.books = Books(inventory=self.cfg.initial_inventory)
         self.done = False
         self.total_cost = 0.0
@@ -48,9 +52,10 @@ class World:
         return self._briefing
 
     def step(self, action: dict):
-        """action = {"qty": 0|20|40, "route": "suez"|"cape"} - route
-        required iff qty > 0. Canonical route names; the API layer
-        translates anon vocabularies (R4)."""
+        """action = {"qty": 0|20|40, "supplier": "qualified"|"spot",
+        "route": "suez"|"cape"} - supplier AND route required iff qty > 0
+        (no fallback). Canonical names; the API layer translates anon
+        vocabularies (R4)."""
         if self.done:
             raise RuntimeError("episode is done; call reset()")
         qty = action["qty"]
@@ -59,16 +64,21 @@ class World:
         route = action.get("route")
         if qty and route not in ("suez", "cape"):
             raise ValueError(f"qty {qty} needs route suez or cape, got {route!r}")
+        supplier = action.get("supplier")
+        if qty and supplier not in ("qualified", "spot"):
+            raise ValueError(
+                f"qty {qty} needs supplier qualified or spot, got {supplier!r}")
 
         briefed = self._briefing is not None
         self._briefing = None
 
         self.week += 1
         self.hidden = step_hidden(self.hidden, self.rng, self.cfg)
-        # ponytail: supplier hard-wired to qualified until T6 adds self.supplier.
-        arrived, costs = resolve_week(self.books, qty, "qualified" if qty else None,
-                                      route if qty else None, self.hidden,
-                                      SupplierState(), self.week, self.cfg)
+        self.supplier = step_supplier(self.supplier, self.rng, self.cfg)
+        arrived, costs = resolve_week(
+            self.books, qty, supplier if qty else None,
+            route if qty else None, self.hidden, self.supplier,
+            self.week, self.cfg)
         if briefed:
             costs["briefing"] = self.cfg.briefing_cost
 
@@ -80,6 +90,7 @@ class World:
         info = {"hidden": self.hidden.to_dict()}  # for replay/oracle, never the agent
         self.trace.append({"week": self.week, "hidden": info["hidden"],
                            "action": {"qty": qty, "route": route if qty else None,
+                                      "supplier": supplier if qty else None,
                                       "briefing": briefed},
                            "obs": obs, "cost": cost})
         return obs, cost, self.done, info
@@ -95,6 +106,7 @@ class World:
             "arrived": arrived,
             "pipeline": [self._display_shipment(s) for s in self.books.pipeline],
             "cost_breakdown": dict(costs),
+            **observe_scorecard(self.supplier, self.cfg),  # {"suppliers": [...]}
         }
         assert not (HIDDEN_KEYS & obs.keys()), "hidden state leaked into observation"
         return obs
@@ -104,4 +116,5 @@ class World:
         mode = self.cfg.semantics
         d["route"] = ROUTE_DISPLAY[mode][d["route"]]
         d["status"] = STATUS_DISPLAY[mode][d["status"]]
+        d["supplier"] = SUPPLIER_DISPLAY[mode][d["supplier"]]
         return d

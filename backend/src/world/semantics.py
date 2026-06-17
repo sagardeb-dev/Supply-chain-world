@@ -111,6 +111,8 @@ SUPPLIER_DISPLAY = {
     "real": {"qualified": "qualified", "spot": "spot"},
     "anon": {"qualified": "source_a", "spot": "source_b"},
 }
+SUPPLIER_PARSE = {mode: {v: k for k, v in d.items()}
+                  for mode, d in SUPPLIER_DISPLAY.items()}
 SUPPLIER_BAND_DISPLAY = {
     "real": {"ontime": "ontime", "slipping": "slipping", "failing": "failing"},
     "anon": {"ontime": "band_0", "slipping": "band_1", "failing": "band_2"},
