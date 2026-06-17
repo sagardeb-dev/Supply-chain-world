@@ -23,7 +23,28 @@ from src.world.semantics import ROUTE_PARSE
 from src.agent.service import svc_briefing, svc_step
 from report_oracle import fixed_policy_cost, base_stock_cost
 
-app = FastAPI(title="supply-chain-pomdp")
+from contextlib import asynccontextmanager
+
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+_RUNS_DIR = Path("runs")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Persistent agent checkpointer for the app lifetime. Entered once here
+    (the saver is an async context manager) and shared on app.state so every
+    agent run resumes across process restarts."""
+    _RUNS_DIR.mkdir(exist_ok=True)
+    cm = AsyncSqliteSaver.from_conn_string(str(_RUNS_DIR / "agent_ckpt.sqlite"))
+    app.state.saver = await cm.__aenter__()
+    try:
+        yield
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+app = FastAPI(title="supply-chain-pomdp", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 episodes: dict[str, World] = {}
@@ -163,6 +184,85 @@ def benchmark(seed: int) -> JSONResponse:
             "luck_premium": causal - clairvoyant, "plan": rows,
         }
     return JSONResponse(content=_bench["per_seed"][seed])
+
+
+# ----------------------------------------------------------------------
+# Agent harness: run/stream/advance/log. One deepagents session plays a
+# whole 26-week episode; its reasoning, tool calls, and results stream out
+# over SSE. Two modes (autonomous / step_gated) and true resume by run_id
+# (the agent's messages live in the sqlite checkpointer entered at lifespan;
+# the World is pickled by the runner under the same id). Registered BEFORE
+# the static mount so these routes win.
+# ----------------------------------------------------------------------
+
+from fastapi.responses import StreamingResponse
+from langgraph.types import Command
+
+from src.agent.runner import AgentRun, stream as agent_stream, KICKOFF
+from src.agent.factory import build_agent
+from src.agent.tools import make_tools
+
+agent_runs: dict[str, AgentRun] = {}
+
+
+class AgentRunRequest(BaseModel):
+    seed: int
+    model: str
+    mode: Literal["autonomous", "step_gated"] = "autonomous"
+    semantics: Literal["real", "anon"] = "real"
+
+
+def _build_agent_for(run: AgentRun):
+    tools = make_tools(run)
+    return build_agent(run.model_slug, run.mode, tools, app.state.saver)
+
+
+@app.post("/agent/runs", status_code=status.HTTP_201_CREATED)
+def create_agent_run(req: AgentRunRequest) -> dict:
+    run_id = uuid4().hex
+    run = AgentRun(run_id, req.seed, req.model, req.mode, req.semantics)
+    agent_runs[run_id] = run
+    return {"run_id": run_id, "seed": req.seed, "model": req.model,
+            "mode": req.mode}
+
+
+@app.get("/agent/runs/{run_id}/stream")
+def stream_agent_run(run_id: str) -> StreamingResponse:
+    run = agent_runs.get(run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown run")
+    if run.active:
+        raise HTTPException(status.HTTP_409_CONFLICT, "run already streaming")
+    agent = _build_agent_for(run)
+    # First connect kicks off the episode; a reconnect after a drop resumes
+    # from the last checkpoint (kickoff=None). The agent's message history
+    # decides which: an empty thread starts, a partial thread continues.
+    kickoff = KICKOFF if not run.recorder else None
+    return StreamingResponse(agent_stream(run, agent, kickoff),
+                             media_type="text/event-stream")
+
+
+@app.post("/agent/runs/{run_id}/advance")
+def advance_agent_run(run_id: str) -> StreamingResponse:
+    run = agent_runs.get(run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown run")
+    if run.mode != "step_gated":
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "advance only applies to step_gated runs")
+    agent = _build_agent_for(run)
+    cmd = Command(resume={"decisions": [{"type": "approve"}]})
+    return StreamingResponse(agent_stream(run, agent, cmd),
+                             media_type="text/event-stream")
+
+
+@app.get("/agent/runs/{run_id}/log")
+def agent_run_log(run_id: str) -> dict:
+    run = agent_runs.get(run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown run")
+    return {"run_id": run_id, "seed": run.seed, "model": run.model_slug,
+            "mode": run.mode, "events": run.recorder}
 
 
 # Serve the Three.js frontend (if present) from the same origin. Mounted

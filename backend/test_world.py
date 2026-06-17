@@ -594,3 +594,46 @@ def test_resume_roundtrip(tmp_path, monkeypatch):
     o1, c1, d1, _ = loaded.world.step({"qty": 40, "route": "cape"})
     o2, c2, d2, _ = ref.world.step({"qty": 40, "route": "cape"})
     assert o1 == o2 and c1 == c2 and d1 == d2
+
+
+def test_agent_sse_mock(monkeypatch):
+    """SSE framing + event order from a scripted (mocked) agent — no LLM.
+    Verifies thought -> tool_call -> tool_result -> done with correct event
+    names, and that the run lifecycle works end to end via TestClient."""
+    import src.api.app as appmod
+    from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+
+    class FakeAgent:
+        async def astream(self, agent_input, config, stream_mode=None):
+            # one reasoning token (messages mode)
+            yield ("messages", (AIMessageChunk(content="thinking about week 0"), {}))
+            # a tool call decision (updates mode)
+            yield ("updates", {"agent": {"messages": [
+                AIMessage(content="", tool_calls=[
+                    {"id": "c1", "name": "place_order",
+                     "args": {"qty": 20, "route": "suez"}}])]}})
+            # the tool result (updates mode)
+            yield ("updates", {"tools": {"messages": [
+                ToolMessage(content="Order placed", name="place_order",
+                            tool_call_id="c1")]}})
+
+    monkeypatch.setattr(appmod, "build_agent",
+                        lambda slug, mode, tools, ckpt: FakeAgent())
+
+    with TestClient(appmod.app) as client:  # context -> runs lifespan (sqlite saver)
+        r = client.post("/agent/runs",
+                        json={"seed": 3, "model": "x/cheap", "mode": "autonomous"})
+        assert r.status_code == 201
+        run_id = r.json()["run_id"]
+
+        with client.stream("GET", f"/agent/runs/{run_id}/stream") as s:
+            body = "".join(chunk for chunk in s.iter_text())
+
+    # event names present and in order
+    for ev in ("event: thought", "event: tool_call", "event: tool_result",
+               "event: done"):
+        assert ev in body, f"missing {ev} in:\n{body}"
+    assert body.index("event: thought") < body.index("event: tool_call") \
+        < body.index("event: tool_result") < body.index("event: done")
+    # the tool_call carried the structured args
+    assert '"name": "place_order"' in body and '"qty": 20' in body
