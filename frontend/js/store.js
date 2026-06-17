@@ -56,13 +56,15 @@ export class Store {
     return obs;
   }
 
-  // A blank week-0 observation: empty pipeline, baseline counts, full books.
-  // Used when an agent run starts before any obs has streamed.
+  // A blank week-0 view, in the ALREADY-NORMALIZED shape scene.applyObs and
+  // ui.update consume (the begin() else-branch passes it through without
+  // normalizeObs). Empty pipeline, calm baseline counts, full books. Used
+  // when an agent run starts before any obs has streamed.
   _emptyObs() {
     return {
-      week: 0, suez_count: 70, bab_count: 70, cape_count: 60,
+      week: 0, suezCount: 70, babCount: 70, capeCount: 60,
       bulletin: '', inventory: 80, arrived: 0,
-      cost_breakdown: {}, pipeline: [],
+      costs: {}, pipeline: [],
     };
   }
 }
