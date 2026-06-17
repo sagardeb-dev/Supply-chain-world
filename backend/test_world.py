@@ -534,3 +534,37 @@ def test_service_parity():
         assert rb["obs"] == oa and rb["cost"] == ca and rb["done"] == da
     # svc_observation reads the current obs (matches the trace tail)
     assert svc_observation(b) == b.trace[-1]["obs"]
+
+
+def test_agent_tools_gating():
+    """Tools mirror the 3 actions, leak no hidden state, and refuse a
+    qty>0 order with no route (no fallback)."""
+    from src.agent.tools import make_tools
+    from src.world.engine import HIDDEN_KEYS
+
+    class FakeRun:
+        def __init__(self):
+            self.world = World(); self.world.reset(3)
+            self.events = []
+        def record(self, week, kind, payload):
+            self.events.append((week, kind))
+
+    run = FakeRun()
+    get_week, buy_briefing, place_order = make_tools(run)
+
+    # get_week returns the obs as text; no hidden key leaks
+    txt = get_week.invoke({})
+    import json as _json
+    obs = _json.loads(txt)
+    assert not (HIDDEN_KEYS & obs.keys())
+
+    # qty>0 with no route raises (no default route)
+    with pytest.raises(Exception):
+        place_order.invoke({"qty": 20, "route": ""})
+
+    # a valid order advances the world one week and records the event
+    before = run.world.week
+    out = place_order.invoke({"qty": 20, "route": "suez"})
+    assert run.world.week == before + 1
+    assert "Order placed" in out
+    assert any(k == "place_order" for _, k in run.events)
