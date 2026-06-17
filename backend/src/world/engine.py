@@ -9,7 +9,7 @@ import random
 from .config import SUPPLIERS, WorldConfig
 from .emission import (analyst_briefing, news_bulletin, observe_counts,
                        observe_scorecard)
-from .contracts import Contract, contract_open
+from .contracts import Contract, contract_open, TERM_MENU, terms_for
 from .logistics import Books, resolve_week
 from .state import SupplierState
 from .semantics import (COUNT_KEYS, ROUTE_DISPLAY, STATUS_DISPLAY,
@@ -57,17 +57,19 @@ class World:
             self._briefing = analyst_briefing(self.hidden, self.cfg)
         return self._briefing
 
-    def _new_contract(self, supplier: str, start: int, weeks: int | None = None):
-        """Mint a contract with default terms (R5 makes terms negotiable)."""
-        weeks = weeks if weeks is not None else self.cfg.contract_weeks
-        base = self.cfg.suez_unit_cost
-        # the incumbent relationship is evergreen (never lapses); spot/backup
-        # contracts are time-boxed bets that expire and must be renewed.
-        end = None if supplier == "qualified" else start + weeks
-        return Contract(supplier=supplier, start_week=start,
-                        end_week=end, unit_price=base,
-                        otif_floor=self.cfg.contract_otif_floor,
-                        break_fee=self.cfg.contract_break_fee)
+    def _new_contract(self, supplier: str, start: int, terms: str | None = None):
+        """Mint a contract from a negotiation-menu selection (R5). Defaults to
+        the 'strict'-length mid profile when no terms are chosen; qualified is
+        always evergreen."""
+        if terms is None:
+            # default: the standard length at base price (no menu choice)
+            end = None if supplier == "qualified" else start + self.cfg.contract_weeks
+            return Contract(supplier=supplier, start_week=start, end_week=end,
+                            unit_price=self.cfg.suez_unit_cost,
+                            otif_floor=self.cfg.contract_otif_floor,
+                            break_fee=self.cfg.contract_break_fee)
+        f = terms_for(terms, supplier, start, self.cfg)
+        return Contract(supplier=supplier, start_week=start, **f)
 
     def _alive(self) -> dict:
         """Which suppliers are alive (not defunct). Derived from the VISIBLE
@@ -105,11 +107,13 @@ class World:
         if sup not in self.suppliers:
             raise ValueError(f"cannot contract unknown supplier {sup!r}")
         # sign/switch/renew: drop any open contract for that supplier, add fresh
+        # one built from the chosen menu terms (the negotiation, R5).
         alive = self._alive()
         self.books.contracts = [
             c for c in self.books.contracts
             if not (c.supplier == sup and contract_open(c, self.week, alive))]
-        self.books.contracts.append(self._new_contract(sup, start=self.week))
+        self.books.contracts.append(
+            self._new_contract(sup, start=self.week, terms=ca.get("terms")))
 
     def step(self, action: dict):
         """action = {"qty": 0|20|40, "supplier": "qualified"|"spot",
@@ -183,6 +187,7 @@ class World:
             **observe_scorecard(self.suppliers, self.cfg),  # {"suppliers": [...]}
             "contracts": [self._display_contract(c) for c in self.books.contracts],
             "contract_open": self._open_supplier_ids(),  # the auto-renewal prompt
+            "term_menu": list(TERM_MENU),  # the negotiation options (R5)
         }
         assert not (HIDDEN_KEYS & obs.keys()), "hidden state leaked into observation"
         return obs

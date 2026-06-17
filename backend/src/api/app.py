@@ -79,6 +79,7 @@ class ResetResponse(BaseModel):
 class ContractAction(BaseModel):
     action: str            # sign|switch|renew|lapse
     supplier: str          # canonical or anon supplier id
+    terms: str | None = None  # negotiation menu key: short|long|strict|lenient
 
 
 class ActionRequest(BaseModel):
@@ -148,7 +149,8 @@ def step_episode(episode_id: str, action: ActionRequest) -> StepResponse:
         if csup is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 f"unknown contract supplier {action.contract.supplier!r}")
-        contract = {"action": action.contract.action, "supplier": csup}
+        contract = {"action": action.contract.action, "supplier": csup,
+                    "terms": action.contract.terms}
     r = svc_step(world, action.qty, route, supplier, contract)
     return StepResponse(obs=r["obs"], cost=r["cost"], done=r["done"])
 

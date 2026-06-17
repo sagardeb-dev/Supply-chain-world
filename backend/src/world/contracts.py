@@ -36,3 +36,38 @@ def contract_open(contract: Contract, week: int, alive: dict) -> bool:
     """
     expired = contract.end_week is not None and week >= contract.end_week
     return expired or not alive[contract.supplier]
+
+# The negotiation MENU: four finite term archetypes. "Negotiating" is selecting
+# one (one action eval -- bounded to a tick, never a bargaining loop). Grounded
+# in the spot-vs-long-term trade-off: a longer lock pays a price premium for
+# certainty; a strict OTIF floor buys a penalty clause the supplier owes you.
+#   weeks            -- contract length in ticks
+#   unit_price_mult  -- multiplier on the base lane unit cost (the lock premium)
+#   otif_floor       -- OTIF below which the penalty clause triggers (R-later)
+#   break_fee_mult   -- multiplier on cfg.contract_break_fee (irreversibility)
+TERM_MENU = {
+    "short":   {"weeks": 4,  "unit_price_mult": 0.97, "otif_floor": 80,
+                "break_fee_mult": 0.5},   # agile, cheap, easy to exit
+    "long":    {"weeks": 12, "unit_price_mult": 1.06, "otif_floor": 85,
+                "break_fee_mult": 2.0},   # price-lock, dearer, hard to exit
+    "strict":  {"weeks": 8,  "unit_price_mult": 1.03, "otif_floor": 92,
+                "break_fee_mult": 1.0},   # high floor: supplier owes you on a slip
+    "lenient": {"weeks": 8,  "unit_price_mult": 0.95, "otif_floor": 70,
+                "break_fee_mult": 1.0},   # cheapest, no real penalty -- you eat risk
+}
+
+
+def terms_for(menu_key: str, supplier: str, start: int, cfg) -> dict:
+    """Concrete contract field values for a menu selection. qualified stays
+    evergreen regardless of the chosen length (the incumbent never lapses)."""
+    if menu_key not in TERM_MENU:
+        raise ValueError(f"unknown terms {menu_key!r}; choose from {list(TERM_MENU)}")
+    m = TERM_MENU[menu_key]
+    end = None if supplier == "qualified" else start + m["weeks"]
+    return {
+        "end_week": end,
+        "unit_price": cfg.suez_unit_cost * m["unit_price_mult"],
+        "otif_floor": m["otif_floor"],
+        "break_fee": cfg.contract_break_fee * m["break_fee_mult"],
+    }
+

@@ -19,7 +19,7 @@ from src.world.emission import (analyst_briefing, news_bulletin,
                                observe_counts, observe_scorecard)
 from src.world.engine import HIDDEN_KEYS
 from src.world.logistics import Books, resolve_week
-from src.world.contracts import Contract, contract_open
+from src.world.contracts import Contract, contract_open, TERM_MENU, terms_for
 from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
 from src.world.semantics import BULLETINS
 from src.world.state import HiddenState, SupplierState
@@ -1161,3 +1161,44 @@ def test_defunct_spot_auto_opens_its_contract_no_script():
     w.suppliers["spot"] = SupplierState(rel_state="defunct")
     obs, *_ = w.step({"qty": 0})  # a do-nothing week
     assert "spot" in obs["contract_open"], "dead supplier must auto-open its contract"
+
+
+# --- R5: negotiation menu (finite term offers, bounded to one tick) ---------
+
+def test_term_menu_has_the_four_archetypes():
+    """The menu is finite and named: short/long/strict/lenient. Each is a
+    distinct (weeks, price, floor, break_fee) profile -- the spot-vs-contract
+    trade-off as a choosable menu, not a bargaining loop."""
+    assert set(TERM_MENU) == {"short", "long", "strict", "lenient"}
+    short, long = TERM_MENU["short"], TERM_MENU["long"]
+    assert short["weeks"] < long["weeks"]              # short locks briefly
+    assert short["unit_price_mult"] < long["unit_price_mult"]  # long pays a lock premium
+    assert TERM_MENU["strict"]["otif_floor"] > TERM_MENU["lenient"]["otif_floor"]
+
+
+def test_terms_for_builds_contract_fields():
+    """terms_for(menu_key, supplier, start, cfg) yields the concrete contract
+    field values for that menu choice."""
+    fields = terms_for("long", "spot", start=3, cfg=CFG)
+    assert fields["end_week"] == 3 + TERM_MENU["long"]["weeks"]
+    assert fields["unit_price"] == CFG.suez_unit_cost * TERM_MENU["long"]["unit_price_mult"]
+    assert fields["otif_floor"] == TERM_MENU["long"]["otif_floor"]
+
+
+def test_sign_with_terms_uses_the_chosen_profile():
+    """Signing a spot contract with terms='short' produces a 4-week contract;
+    'long' produces a 12-week one. The negotiation is this selection."""
+    w = World()
+    w.reset(3)
+    w.step({"qty": 0, "contract": {"action": "sign", "supplier": "spot",
+                                   "terms": "long"}})
+    c = next(c for c in w.books.contracts if c.supplier == "spot")
+    assert c.end_week == 0 + TERM_MENU["long"]["weeks"]
+
+
+def test_obs_offers_term_menu_at_open():
+    """At contract_open the obs carries the offered menu keys so the agent can
+    choose. (Always present; it's a stable finite menu.)"""
+    w = World()
+    obs0 = w.reset(3)
+    assert set(obs0["term_menu"]) == {"short", "long", "strict", "lenient"}
