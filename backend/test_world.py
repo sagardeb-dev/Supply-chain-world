@@ -568,3 +568,29 @@ def test_agent_tools_gating():
     assert run.world.week == before + 1
     assert "Order placed" in out
     assert any(k == "place_order" for _, k in run.events)
+
+
+def test_resume_roundtrip(tmp_path, monkeypatch):
+    """An AgentRun's World survives save/load rng-faithfully: the loaded
+    World's next step matches the un-pickled World's next step."""
+    import src.agent.runner as runnermod
+    monkeypatch.setattr(runnermod, "RUNS_DIR", tmp_path)
+    from src.agent.runner import AgentRun
+
+    run = AgentRun("test-run", seed=3, model_slug="x", mode="autonomous")
+    # advance the World two weeks through the same path the tools use
+    run.world.step({"qty": 20, "route": "suez"})
+    run.world.step({"qty": 0, "route": None})
+    run.save()
+
+    # a reference World driven identically, NOT pickled
+    ref = AgentRun("ref-run", seed=3, model_slug="x", mode="autonomous")
+    ref.world.step({"qty": 20, "route": "suez"})
+    ref.world.step({"qty": 0, "route": None})
+
+    loaded = AgentRun.load("test-run")
+    assert loaded.seed == 3 and loaded.mode == "autonomous"
+    # same next action -> identical obs/cost/done (rng restored exactly)
+    o1, c1, d1, _ = loaded.world.step({"qty": 40, "route": "cape"})
+    o2, c2, d2, _ = ref.world.step({"qty": 40, "route": "cape"})
+    assert o1 == o2 and c1 == c2 and d1 == d2
