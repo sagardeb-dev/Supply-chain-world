@@ -93,11 +93,16 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     ponytail: unit economics (spot discount / qualified premium) and the
     disruption cost coupling land in T5; this task only wires the shortfall."""
     shipping = 0.0
+    shortfall_units = 0
     if qty:
         frac = sup.fulfilled_fraction if supplier == "spot" else 1.0
         shipped = round(qty * frac)
+        shortfall_units = qty - shipped
         if shipped:
-            unit = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
+            base = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
+            # unit economics (A8.1): spot undercuts the lane, qualified adds a premium
+            unit = (base - cfg.spot_unit_discount if supplier == "spot"
+                    else base + cfg.qualified_premium)
             books.pipeline.append(Shipment(shipped, route, week, supplier))
             shipping = shipped * unit
 
@@ -114,11 +119,19 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     books.inventory -= served
 
     in_transit = sum(s.qty for s in books.pipeline)
+    # The Becker JV coupling (A8.2): a spot shortfall is cheap in calm weeks but
+    # punishing when a disruption is brewing -- the lost units must be back-ordered
+    # at the crisis spot rate. Reads BOTH factors (disruption regime + spot
+    # shortfall) but lives in the reward, so the belief stays factored.
+    couple = (cfg.crisis_backorder_kappa * shortfall_units
+              if shortfall_units and h.regime in
+              ("watch", "crash", "blockage", "crisis") else 0.0)
     costs = {
         "shipping": shipping,
         "surcharge": surcharge,  # diverted voyages billed at the Cape rate
         "holding": cfg.holding_cost * books.inventory,
         "in_transit": cfg.holding_cost * in_transit,  # capital cost on the water
         "stockout": cfg.stockout_cost * shortfall,
+        "couple": couple,
     }
     return arrived, costs

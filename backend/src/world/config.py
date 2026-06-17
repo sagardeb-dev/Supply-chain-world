@@ -56,6 +56,11 @@ class WorldConfig:
     # --- supplier economics ---
     spot_unit_discount: float = 1.5       # S is 1.5/unit cheaper than Q's lane cost
     qualified_premium: float = 1.0        # Q adds 1.0/unit over the route base cost
+    # The cost COUPLING knob (Becker JV term): a spot shortfall during a
+    # disruption-active week is back-ordered at the crisis spot rate. Set to
+    # 3x the stockout cost so gambling on spot when the Red Sea is twitchy is
+    # punishing -- this is the only calibration knob the hedge turns on.
+    crisis_backorder_kappa: float = 60.0  # = 3.0 x stockout_cost
 
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam

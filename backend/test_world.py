@@ -225,7 +225,8 @@ def test_qty_zero_dispatches_nothing():
 
 def test_qty_forty_ships_forty():
     books, first, costs = sail([CALM] * 5, orders=[(40, "suez")] + [(0, None)] * 4)
-    assert costs[0]["shipping"] == 40 * CFG.suez_unit_cost
+    assert costs[0]["shipping"] == 40 * (CFG.suez_unit_cost
+                                         + CFG.qualified_premium)
     assert costs[0]["in_transit"] == 40 * CFG.holding_cost
     assert first.qty == 40 and first.arrives_week == 4
     assert costs[3]["in_transit"] == 0  # the 40 landed at week 4
@@ -873,3 +874,48 @@ def test_voyage_dynamics_unchanged_on_shipped_qty():
     on the clean-passage schedule (regression pin)."""
     _, s, _ = sail([CALM] * 5, supplier="qualified")
     assert (s.arrives_week, s.status) == (4, "at_sea")
+
+
+
+# --- T5: cost coupling (the Becker JV term) -------------------------------
+
+def test_unit_economics_spot_cheaper_qualified_dearer():
+    """Spot undercuts the lane unit cost by spot_unit_discount; qualified
+    adds qualified_premium. Compared on the SHIPPED qty (reliable -> full)."""
+    books_q = Books(inventory=CFG.initial_inventory)
+    _, cq = resolve_week(books_q, 40, "qualified", "suez", CALM,
+                         SupplierState(), 1, CFG)
+    books_s = Books(inventory=CFG.initial_inventory)
+    _, cs = resolve_week(books_s, 40, "spot", "suez", CALM,
+                         SupplierState(), 1, CFG)
+    base = CFG.suez_unit_cost * 40
+    assert cq["shipping"] == base + CFG.qualified_premium * 40
+    assert cs["shipping"] == base - CFG.spot_unit_discount * 40
+
+
+def test_couple_surcharge_only_when_disruption_active():
+    """A spot shortfall during a watch/crash/blockage/crisis week incurs the
+    scarcity surcharge kappa*(qty-shipped); in calm/recovery it does not."""
+    WATCH = HiddenState("watch")
+    # wobbling spot: orders 40, ships 20 -> shortfall 20
+    sup = SupplierState(rel_state="wobbling")
+    books_calm = Books(inventory=CFG.initial_inventory)
+    _, c_calm = resolve_week(books_calm, 40, "spot", "suez", CALM, sup, 1, CFG)
+    books_watch = Books(inventory=CFG.initial_inventory)
+    _, c_watch = resolve_week(books_watch, 40, "spot", "suez", WATCH, sup, 1, CFG)
+    assert c_calm.get("couple", 0.0) == 0.0
+    expected = CFG.crisis_backorder_kappa * (40 - 20)
+    assert c_watch["couple"] == expected
+
+
+def test_couple_no_surcharge_for_qualified_or_full_spot():
+    """No shortfall -> no coupling, even in a crisis week."""
+    CRISIS = HiddenState("disruption", 1, "long")
+    books_q = Books(inventory=CFG.initial_inventory)
+    _, cq = resolve_week(books_q, 40, "qualified", "suez", CRISIS,
+                         SupplierState(rel_state="degraded", rel_age=1), 1, CFG)
+    assert cq.get("couple", 0.0) == 0.0  # qualified ships full
+    books_s = Books(inventory=CFG.initial_inventory)
+    _, cs = resolve_week(books_s, 40, "spot", "suez", CRISIS,
+                         SupplierState(), 1, CFG)  # reliable spot ships full
+    assert cs.get("couple", 0.0) == 0.0

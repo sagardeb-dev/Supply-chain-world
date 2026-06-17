@@ -120,7 +120,10 @@ def resolve_rel(pipe: tuple, inventory: int, qty: int, route,
 
     shipping = 0.0
     if qty:
-        unit = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
+        base = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
+        # ponytail: qualified-supplier economics; T7 threads spot discount + the
+        # shortfall/couple branch through here for the second marginal.
+        unit = base + cfg.qualified_premium
         shipping = qty * unit
     new_e0 = (qty, route) if qty else None
 
