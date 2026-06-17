@@ -3,6 +3,91 @@
 Design decisions for the supply-chain POMDP world. Each entry records what
 changed, why, and the evidence. Code follows this file, never the reverse.
 
+## 2026-06-17 — LLM agent harness (deepagents, OpenRouter, SSE, resume)
+
+### Problem
+
+The world has a clean Gym-shaped surface (reset / step / request_briefing)
+but no agent and no way to watch one play. A prior attempt produced a
+turn-by-turn agent — re-invoked fresh once per week, no memory across
+weeks, 26 cold questionnaires instead of one continuous planner. That is
+the "quiz not a job" mistake reincarnated in the agent. We need to (a)
+see an LLM play live, and (b) measure the one missing number: how much of
+the causal-oracle skill gap a real LLM captures, and where its reasoning
+fails. That number gates the "scale the factors" decision (which
+difficulty axis is actually too easy) — building a second latent module
+before we have it would be blind.
+
+### Decisions
+
+1. **The agent owns the loop.** One deepagents session runs the whole
+   26-week episode. We hand it its tools once plus a system prompt
+   describing the desk, and let the tool-calling loop run until the
+   episode reports done. There is NO `for week in range(26)` wrapping the
+   agent; the week counter lives inside World. This is the entire point
+   of the rebuild.
+
+2. **Tools mirror the three real world actions, 1:1.** get_week
+   (the current observation), buy_briefing (the paid analyst line),
+   place_order (qty in {0,20,40} x route in {suez,cape}, advances a
+   week). No invented actions, no "assessment report" — the world has
+   exactly these three. The briefing tool is exposed even though the
+   oracle never buys it (the chokepoint leaks make the info effectively
+   free): an agent that buys it is over-spending, and that over-spend is
+   a measurement, not a bug to fix here.
+
+3. **Tools are thin wrappers over the same in-process World methods the
+   HTTP handlers call.** A new svc_* service layer (svc_observation /
+   svc_briefing / svc_step) is the single path both the HTTP API and the
+   agent tools go through — no self-HTTP, no duplicated world logic, same
+   gates. The agent never receives the step() info dict (hidden state);
+   get_week output is asserted to share no key with HIDDEN_KEYS.
+
+4. **No fallback logic, anywhere.** A missing OPENROUTER_API_KEY, a
+   place_order with qty>0 and no route, or a model error each RAISE and
+   surface as a visible SSE `error` event. No silent default route, no
+   retry-with-simpler-prompt, no default order. The run either works or
+   stops loud.
+
+5. **OpenRouter is the sole provider; the key stays server-side.** The
+   model is langchain_openai.ChatOpenAI pointed at
+   https://openrouter.ai/api/v1, key read from os.environ
+   (exported in the VM shell before uvicorn — never committed, never sent
+   to the browser). Any OpenRouter slug can be typed at run time; the
+   frontend default starts cheap to validate plumbing before a flagship
+   run spends credit.
+
+6. **Two run modes via interrupt_on.** Autonomous = the agent plays all
+   26 weeks straight through. Step-gated = create_deep_agent(...,
+   interrupt_on={"place_order": True}) pauses before each order; the
+   human clicks Advance and the run resumes via
+   Command(resume={"decisions":[{"type":"approve"}]}). One config line is
+   the only difference.
+
+7. **True mid-run resume by run_id.** deepagents' AsyncSqliteSaver
+   persists the agent's message history across process restarts; we
+   separately pickle the World object (verified picklable and
+   rng-faithful across pickle) keyed by the same run_id, snapshotting it
+   inside place_order so the agent checkpoint and the world snapshot never
+   diverge by more than one idempotent step. On resume: load the World,
+   rebuild the agent against the same checkpointer + thread_id, continue.
+
+8. **Reasoning streams live over SSE.** agent.astream(input, config,
+   stream_mode=["updates","messages"]) demuxes into SSE events: `thought`
+   (reasoning tokens from messages), `tool_call` and `tool_result`
+   (structured, from updates), `interrupt` (step-gate pause), `done`,
+   `error`. A vanilla-JS EventSource panel renders them; the existing
+   oracle scoreboard fills in at `done`. The 3D scene reacting to the
+   stream is deferred — the text panel is the diagnostic.
+
+### Scope
+
+New code lives in backend/src/agent/ (service, tools, factory, prompt,
+runner) plus four endpoints and a sqlite lifespan in src/api/app.py, plus
+a frontend agent panel. The engine (src/world/*) is UNTOUCHED. New deps
+go in a uv `agent` dependency group. Tests extend test_world.py with a
+MOCKED model — no test makes a live LLM call.
+
 ## 2026-06-12 — Research surface: read-only API + explainer UI
 
 ### Problem
