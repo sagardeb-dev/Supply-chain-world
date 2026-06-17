@@ -88,6 +88,40 @@ a frontend agent panel. The engine (src/world/*) is UNTOUCHED. New deps
 go in a uv `agent` dependency group. Tests extend test_world.py with a
 MOCKED model — no test makes a live LLM call.
 
+
+### Sign-off (verified 2026-06-17)
+
+Built across commits add5edb..(this). Backend tests: 42/42 (38 prior +
+service_parity, tools_gating, resume_roundtrip, agent_sse_mock; the agent
+tests use a mocked model, no live LLM). Run persistence verified live:
+per-run JSONL log + pickled World snapshots + the deepagents sqlite
+checkpointer all populated by a real episode.
+
+Frontend verified live with Playwright. Two bugs found and fixed there:
+the start modal (z 50) covered the always-on agent panel and ate its
+clicks (panel raised to z 60); and the agent was built synchronously in
+the endpoint, so a missing key raised an opaque 500 instead of a visible
+error (stream() now takes a build thunk and constructs the agent inside
+its try, so missing-key / bad-slug surface as a readable `error` event --
+confirmed live before the key was supplied).
+
+First real agent-vs-oracle datapoint (seed 3, model openai/gpt-oss-120b:nitro,
+autonomous): the agent played all 26 weeks and the scoreboard rendered
+clairvoyant $3200 = causal oracle $3200 (luck premium 0 on this seed),
+best fixed policy $3560, agent $4540. The agent's regret vs the oracle is
+$1340 and it underperformed the naive base-stock policy by ~$1000: it
+settled into a rigid 20-via-Suez-every-week policy, ignored the Red Sea
+disruption bulletin it saw from week 4, never front-loaded (qty 40), and
+never switched to Cape. So the very signal the world is built around went
+unused. This reframes "too easy": the agent is not beating the existing
+task, let alone finding it trivial -- the gap to scale toward is the
+agent's, not the oracle's. The next factor decision should be gated on a
+sweep across seeds and a stronger model, not assumed.
+
+Open / deferred: model dropdown (text input for now), edit/reject in the
+step-gate (approve-only), 3D scene reacting to the stream (text panel is
+the diagnostic), a multi-seed agent sweep.
+
 ## 2026-06-12 — Research surface: read-only API + explainer UI
 
 ### Problem
