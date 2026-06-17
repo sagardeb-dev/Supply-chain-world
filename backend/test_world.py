@@ -753,10 +753,16 @@ def test_step_supplier_matches_hand_distribution():
                           "reliable": c.sup_wobble_to_reliable,
                           "wobbling": 1 - c.sup_wobble_to_degraded
                                         - c.sup_wobble_to_reliable},
-        ("degraded", 0): {"degraded": c.sup_degraded_persist,
-                          "reliable": 1 - c.sup_degraded_persist},
-        ("degraded", 1): {"degraded": c.sup_degraded_persist,
-                          "reliable": 1 - c.sup_degraded_persist},
+        # degraded: the death hazard h fires first; the surviving (1-h) mass
+        # splits recover/persist as before (R2 Lever 1).
+        ("degraded", 0): {
+            "defunct": c.sup_defunct_from_degraded,
+            "degraded": (1 - c.sup_defunct_from_degraded) * c.sup_degraded_persist,
+            "reliable": (1 - c.sup_defunct_from_degraded) * (1 - c.sup_degraded_persist)},
+        ("degraded", 1): {
+            "defunct": c.sup_defunct_from_degraded,
+            "degraded": (1 - c.sup_defunct_from_degraded) * c.sup_degraded_persist,
+            "reliable": (1 - c.sup_defunct_from_degraded) * (1 - c.sup_degraded_persist)},
     }
     rng = random.Random(0)
     n = 20000
@@ -777,7 +783,46 @@ def test_step_supplier_degraded_forced_exit():
     rng = random.Random(1)
     s = SupplierState(rel_state="degraded", rel_age=CFG.sup_max_degraded - 1)
     for _ in range(2000):
-        assert step_supplier(s, rng, CFG).rel_state == "reliable"
+        # at the cap a degraded supplier never persists: it either recovers or
+        # dies (the death hazard, R2). It must NOT stay degraded.
+        assert step_supplier(s, rng, CFG).rel_state in ("reliable", "defunct")
+
+
+def test_defunct_is_absorbing_and_ships_zero():
+    """A defunct supplier is dead for the episode: regime 'defunct',
+    fulfilled_fraction 0.0, and step_supplier never revives it."""
+    dead = SupplierState(rel_state="defunct")
+    assert dead.regime == "defunct"
+    assert dead.fulfilled_fraction == 0.0
+    rng = random.Random(0)
+    for _ in range(50):
+        assert step_supplier(dead, rng, CFG).rel_state == "defunct"
+
+
+def test_degraded_can_become_defunct():
+    """From degraded, the supplier dies with hazard sup_defunct_from_degraded.
+    Over many seeds at least one transition lands in defunct."""
+    seen = set()
+    for seed in range(400):
+        rng = random.Random(seed)
+        s = SupplierState(rel_state="degraded", rel_age=0)
+        seen.add(step_supplier(s, rng, CFG).rel_state)
+    assert "defunct" in seen, "degraded must be able to transition to defunct"
+    # and non-degraded states never die directly
+    rng = random.Random(1)
+    for st in ("reliable", "wobbling"):
+        outs = {step_supplier(SupplierState(rel_state=st), random.Random(k),
+                              CFG).rel_state for k in range(200)}
+        assert "defunct" not in outs, f"{st} must not jump straight to defunct"
+
+
+def test_defunct_scorecard_row_shows_dead():
+    """The scorecard row for a defunct spot shows OTIF None ('-') and band
+    'defunct' -- the collapse is visible to the agent."""
+    sc = scorecard(rel_state="defunct")
+    row = _spot(sc)
+    assert row["otif"] is None
+    assert row.get("band") == "defunct"
 
 
 def test_step_supplier_ages_in_place():

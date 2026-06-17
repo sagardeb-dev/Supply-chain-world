@@ -37,12 +37,14 @@ def _supplier_row(sid: str, sup: SupplierState, cfg: WorldConfig) -> dict:
     NEVER reads the disruption state (observation independence)."""
     prof = SUPPLIERS[sid]
     if prof["drifts"]:
-        otif, lead = SUPPLIER_SCORECARD[sup.regime]
+        band = sup.regime  # ontime|slipping|failing|defunct (Lever 1)
+        otif, lead = SUPPLIER_SCORECARD[band]
     elif sid == "qualified":
-        otif, lead = prof["otif"], prof["lead"]
+        band, otif, lead = "ontime", prof["otif"], prof["lead"]
     else:  # backup
+        band = "ontime"
         otif, lead = cfg.backup_base_otif, cfg.backup_lead_days
-    row = {"id": sid, "otif": otif, "lead_days": lead,
+    row = {"id": sid, "otif": otif, "lead_days": lead, "band": band,
            "onboard_lead": prof["onboard_weeks"]
            if prof["onboard_weeks"] is not None else cfg.backup_onboard_weeks}
     # unit economics, per supplier: spot discounts, qualified/backup add a delta

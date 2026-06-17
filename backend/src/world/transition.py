@@ -66,8 +66,16 @@ def step_supplier(sup: SupplierState, rng: random.Random,
             nxt = "reliable"
         else:
             nxt = "wobbling"
+    elif s == "defunct":
+        # Lever 1: absorbing. A dead supplier stays dead for the episode.
+        return sup
     else:  # degraded
-        over = (age + 1 >= cfg.sup_max_degraded
-                or rng.random() > cfg.sup_degraded_persist)
-        nxt = "reliable" if over else "degraded"
+        # First check the death hazard (degraded is the only entry to defunct);
+        # then the recover-or-persist branch as before.
+        if rng.random() < cfg.sup_defunct_from_degraded:
+            nxt = "defunct"
+        else:
+            over = (age + 1 >= cfg.sup_max_degraded
+                    or rng.random() > cfg.sup_degraded_persist)
+            nxt = "reliable" if over else "degraded"
     return SupplierState(rel_state=nxt, rel_age=0 if nxt != s else age + 1)

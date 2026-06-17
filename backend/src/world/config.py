@@ -24,6 +24,7 @@ SUPPLIER_SCORECARD = {
     "ontime":   (98, 14),
     "slipping": (82, 18),
     "failing":  (55, 28),
+    "defunct":  (None, None),   # dead supplier: OTIF '-' on the scorecard
 }
 
 
@@ -69,6 +70,11 @@ class WorldConfig:
     sup_wobble_to_reliable: float = 0.35  # the slip recovers (a false scare)
     sup_degraded_persist: float = 0.70    # degraded spells run ~3 wks
     sup_max_degraded: int = 4
+    # Lever 1 (the defunct primitive): per-week hazard that a chronically
+    # failing (degraded) supplier dies for good. ~16% tech-sector bankruptcy /
+    # 14.5% of disruptions are supplier failures -> a few % per week from
+    # degraded gives a realistic 'distressed -> dead' tail. Absorbing.
+    sup_defunct_from_degraded: float = 0.06
     # --- supplier economics ---
     spot_unit_discount: float = 1.5       # S is 1.5/unit cheaper than Q's lane cost
     qualified_premium: float = 1.0        # Q adds 1.0/unit over the route base cost

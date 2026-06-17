@@ -12,7 +12,7 @@ from dataclasses import dataclass, asdict
 EVENT_STATES = ("calm", "watch", "disruption", "recovery", "false_alarm")
 DISRUPTION_TYPES = ("short", "long")
 
-SUPPLIER_STATES = ("reliable", "wobbling", "degraded")
+SUPPLIER_STATES = ("reliable", "wobbling", "degraded", "defunct")
 
 
 @dataclass(frozen=True)
@@ -61,18 +61,22 @@ class SupplierState:
 
     @property
     def regime(self) -> str:
-        """Scorecard-band key. wobbling and degraded-onset share "slipping"."""
+        """Scorecard-band key. wobbling and degraded-onset share "slipping";
+        defunct (the dead supplier, Lever 1) is its own absorbing band."""
         if self.rel_state == "reliable":
             return "ontime"
         if self.rel_state == "wobbling":
             return "slipping"
+        if self.rel_state == "defunct":
+            return "defunct"
         # degraded
         return "slipping" if self.rel_age == 0 else "failing"
 
     @property
     def fulfilled_fraction(self) -> float:
         """Share of a spot order this supplier actually ships this week."""
-        return {"reliable": 1.0, "wobbling": 0.5, "degraded": 0.0}[self.rel_state]
+        return {"reliable": 1.0, "wobbling": 0.5,
+                "degraded": 0.0, "defunct": 0.0}[self.rel_state]
 
     def to_dict(self) -> dict:
         d = asdict(self)
