@@ -20,7 +20,7 @@ from src.world.engine import HIDDEN_KEYS
 from src.world.logistics import Books, resolve_week
 from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
 from src.world.semantics import BULLETINS
-from src.world.state import HiddenState
+from src.world.state import HiddenState, SupplierState
 from src.world.causal_oracle import (EMPTY_PIPE, CausalOracle, canonical,
                                      causal_play, resolve_rel,
                                      transition_dist)
@@ -45,6 +45,14 @@ def run_episode(seed, routes=("suez",), qty=20):
 
 def counts(**kw):
     return tuple(observe_counts(HiddenState(**kw), CFG).values())
+
+
+def sup_regime(**kw):
+    return SupplierState(**kw).regime
+
+
+def sup_frac(**kw):
+    return SupplierState(**kw).fulfilled_fraction
 
 
 def sail(weekly_hidden, orders=None):
@@ -707,3 +715,16 @@ def test_place_order_event_carries_obs(tmp_path, monkeypatch):
     # a non-place_order tool_result carries no world update
     gw = by_name["get_week"]
     assert "obs" not in gw and "cost" not in gw
+
+
+def test_supplier_regime_and_fulfilment():
+    """The spot supplier's visible OTIF band collapses wobbling and the
+    first week of degraded into one 'slipping' band (the supplier analogue
+    of the disruption crash ambiguity); they separate one week later."""
+    assert sup_regime() == "ontime"
+    assert sup_regime(rel_state="wobbling") == "slipping"
+    assert sup_regime(rel_state="degraded", rel_age=0) == "slipping"
+    assert sup_regime(rel_state="degraded", rel_age=1) == "failing"
+    assert sup_frac() == 1.0
+    assert sup_frac(rel_state="wobbling") == 0.5
+    assert sup_frac(rel_state="degraded") == 0.0
