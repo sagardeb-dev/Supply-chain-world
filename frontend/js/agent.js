@@ -9,7 +9,12 @@ function compactArgs(args) {
 }
 
 export class AgentPanel {
-  constructor() {
+  // `store` is the shared view-store (same instance the human play path uses);
+  // `beginEpisode({seed, semantics})` reveals the shared HUD + clears the
+  // scene to week 0 when a run starts.
+  constructor(store, beginEpisode) {
+    this._store   = store;
+    this._beginEpisode = beginEpisode;
     this._src    = null;   // active EventSource
     this._runId  = null;
     this._lastThought = null;  // current thought div (for coalescing)
@@ -49,6 +54,9 @@ export class AgentPanel {
 
     const data = await res.json();
     this._runId = data.run_id;
+    // reveal the shared HUD + clear the scene to week 0; each place_order
+    // SSE event then drives the world forward via the store.
+    this._beginEpisode({ seed: data.seed, semantics: data.semantics });
     this._open('/agent/runs/' + this._runId + '/stream');
   }
 
@@ -166,11 +174,17 @@ export class AgentPanel {
     this._scrollLog();
   }
 
-  _onToolResult({ content }) {
+  _onToolResult(data) {
+    // place_order events carry the post-step obs — drive the shared world
+    // (3D map, books, week pill, bulletin) forward. get_week/buy_briefing
+    // results have no obs, so only their text line renders.
+    if (data.obs) {
+      this._store.applyObs(data.obs, data.cost);
+    }
     this._lastThought = null;
     const div = document.createElement('div');
     div.className = 'ag-result';
-    const text = String(content ?? '');
+    const text = String(data.content ?? '');
     div.textContent = text.length > 400 ? text.slice(0, 400) + '…' : text;
     this._log.appendChild(div);
     this._scrollLog();

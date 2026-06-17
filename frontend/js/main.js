@@ -110,8 +110,30 @@ const store = new Store(scene, ui);
 
 ui.showNewModal();
 
-// agent panel
-const agentPanel = new AgentPanel();
+// agent panel — the agent drives the SAME store/scene/ui the human play
+// path uses. beginAgentEpisode reveals the shared HUD and clears the scene
+// to week 0; each place_order SSE event then moves the world via the store.
+function beginAgentEpisode({ seed, semantics }) {
+  document.body.dataset.mode = 'agent';
+  const labels = LABELS[semantics];
+  ui.beginEpisode(labels);                 // reveal shared HUD panels
+  store.begin({ semantics, seed, research: false, labels, firstObs: null });
+}
+const agentPanel = new AgentPanel(store, beginAgentEpisode);
+
+// mode toggle: swap the bottom control region (CSS shows/hides by
+// body[data-mode]). It does not start or stop any run — the human start
+// modal opens on load; the agent run starts on its own run ▶ button.
+document.getElementById('mode-toggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const mode = btn.dataset.mode;
+  document.body.dataset.mode = mode;
+  for (const b of document.querySelectorAll('#mode-toggle button')) {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  }
+});
+
 window.__agentOnDone = (seed, totalCost) => {
   pollBenchmark(seed, totalCost);
   const endModal = document.getElementById('modal-end');
