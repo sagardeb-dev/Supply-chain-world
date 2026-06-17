@@ -3,6 +3,119 @@
 Design decisions for the supply-chain POMDP world. Each entry records what
 changed, why, and the evidence. Code follows this file, never the reverse.
 
+## 2026-06-17 — Supplier roster, contracts, and the three emergence levers
+
+### Problem
+
+The world had one supplier choice (qualified vs spot) and no relationship
+structure. The manager's ask: model real supplier relationships — multiple
+suppliers, contracts with terms and timers, the ability to negotiate, and
+events like a supplier going under. The deeper ask: can these mechanics
+*emerge* from authored primitives, so adding realistic detail does not mean
+hand-coding every scenario? The answer is a recipe (below) and three levers.
+
+### The module recipe (one entity = one module)
+
+Every entity is built from fixed slots, so adding one is additive and the
+exact oracle survives:
+
+- **state** — its own dataclass, reads no other module.
+- **kernel** — `step(state, rng, cfg)`: one tick, own state + shared rng only.
+- **emission** — noiseless, own observation keys.
+- **actions** — finite verbs + a validator.
+- **cost** — the ONLY slot allowed to read more than one module's state.
+
+Two laws keep the exact oracle alive: (1) couple only through cost, so beliefs
+factorize and the oracle is exact factored expectimax — adding a supplier is
++1 marginal; (2) one tick = bounded work, so "negotiation" is menu selection,
+never a multi-round dialogue.
+
+### The three levers (emergence without per-scenario code)
+
+The discipline: **never write a rule against a date or a named scenario —
+only against a condition, a probability, or a cost.**
+
+1. **Generative primitive** — a low-probability kernel transition. Here:
+   `sup_defunct_from_degraded = 0.06`/week, a chronically degraded spot
+   supplier dies for good (absorbing `defunct`). This produces unscheduled
+   collapse events without anyone scripting "week N, supplier dies".
+2. **Standing rule** — a CONDITION, never a date. A contract is *open*
+   (needs attention) iff `expired OR supplier-not-alive`. Nothing references
+   the defunct primitive; yet when a sourced supplier dies, its contract
+   auto-opens and the renewal prompt fires. Proven by
+   `test_defunct_spot_auto_opens_its_contract_no_script`.
+3. **Cost gradient** — `dual_source_overhead = 4.0`/week for carrying ≥2 live
+   time-boxed contracts. We author only the cost; the *strategy* of hedging
+   under volatility emerges as the agent's optimal response.
+
+### Decisions
+
+1. **Roster of three** (`SUPPLIERS` registry): `qualified` (frozen incumbent,
+   OTIF 99, lead 14d, +$1.0/u, evergreen contract), `spot` (drifts via the
+   reliability kernel, −$1.5/u, can ship short or die), `backup` (frozen
+   mid-tier, OTIF 95, lead 16d, +$0.3/u, 1-week onboarding before its first
+   shipment). Only spot carries hidden latent state — the oracle's one
+   supplier chain.
+2. **Per-contract sourcing, not per-order.** You sign a contract with a
+   supplier; sourcing is gated to suppliers with a live contract. No fallback:
+   sourcing an uncontracted supplier raises (`ValueError`), it does not
+   silently substitute.
+3. **Evergreen incumbent.** The qualified contract has `end_week = None` and
+   never expires — avoids the dominance trap only via the `qualified_premium`
+   knob (the incumbent is reliable but dearer, so the cheaper-but-riskier spot
+   stays a real choice).
+4. **Negotiation = menu** (`TERM_MENU`: short/long/strict/lenient), each a
+   bounded set of (weeks, unit multiplier, OTIF floor, break-fee multiplier).
+   `contract_weeks = 8` → ~3 renewal events per 26-week horizon;
+   `contract_otif_floor = 85`; `contract_break_fee = 10.0` (irreversibility
+   teeth on early exit).
+5. **Hard gap.** When an exclusive spot supplier dies, you are stuck — you
+   cannot even source it (its contract is now open) and backup needs
+   onboarding. The punishment is the absence of an escape hatch; it falls out
+   of R2 (defunct → ships 0) × R4 (the mask), not from coded logic.
+
+### Frontend (R8)
+
+- 3-row defunct-aware scorecard (OTIF/lead/unit-delta, severity band, DEFUNCT
+  marker, ◆ contracted / ← sourced / onboard marks).
+- Contract HUD: contract chips (supplier, ends-week or evergreen, unit price)
+  plus an auto-renewal banner that surfaces `contract_open` — the emergence,
+  visible, fired by the world's standing rule, not a scripted week.
+- **Auto-sign UX**: the supplier deck chooses who fulfils this week's order;
+  sourcing a supplier with no open contract auto-signs one in the same step.
+  The act of sourcing IS contracting — no separate sign screen, and it removes
+  the dead-end where selecting an uncontracted supplier hard-failed.
+
+### Oracle gate (R7)
+
+The exact belief-MDP expectimax solver still solves (~122 s once per process)
+and the engine-vs-DP cross-check still passes against the fully rebuilt engine:
+contracts are observed and deterministic (not belief), so coupling stays
+cost-only and the factorization holds. Shipped decision: the oracle remains
+qualified-only-valid for v1 (it sources the incumbent); the fully factored
+supplier-marginal oracle is deferred as a scoped follow-up. The anchor — the
+benchmark's entire value — survives.
+
+### Verification
+
+- `test_world.py`: 80 fast tests pass (2 slow oracle tests deselected for
+  speed; run them for the gate). Key pins: the defunct kernel hazard
+  distribution, the no-script auto-open emergence, the per-contract source
+  mask (raises on uncontracted), the dual-source overhead cost, the hard gap.
+- Live page driven via Playwright: 3-supplier scorecard + contract HUD render;
+  sourcing spot auto-signs and the second contract chip appears (Week 0 → 1,
+  no 500).
+
+### Calibration evidence (supplier reliability + bankruptcy)
+
+| World number | Real anchor |
+|---|---|
+| sup_defunct_from_degraded 0.06/wk | ~16% tech-sector bankruptcy; ~14.5% of disruptions are supplier failures — a few %/wk from a distressed (degraded) supplier gives a realistic 'distressed → dead' tail |
+| qualified OTIF 99 vs spot drift | tier-1 qualified vendors run high, audited OTIF; spot/marketplace sources slip |
+| backup 1-wk onboard | new-supplier qualification/onboarding lead before first PO ships |
+| contract 8 wks | quarter-ish purchase-agreement terms → ~3 renewals/horizon |
+| break fee 10.0 | early-termination clauses are standard teeth on supply contracts |
+
 ## 2026-06-17 — LLM agent harness (deepagents, OpenRouter, SSE, resume)
 
 ### Problem

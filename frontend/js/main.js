@@ -1,5 +1,5 @@
 // Episode controller: wires the API, the Three.js scene, and the HUD.
-import { api, LABELS, routeForWire, supplierForWire } from './api.js';
+import { api, LABELS, routeForWire, supplierForWire, normalizeObs } from './api.js';
 import { SceneView } from './scene.js';
 import { UI } from './ui.js';
 import { AgentPanel } from './agent.js';
@@ -65,6 +65,7 @@ const ui = new UI({
       const labels = LABELS[semantics];
       ui.beginEpisode(labels);
       store.begin({ semantics, seed, research, labels, firstObs: res.obs });
+      state.obs = normalizeObs(res.obs, semantics);  // seed for auto-sign
       if (research) {
         document.getElementById('xray-rail')?.classList.remove('hidden');
         ui.updateRail((await api.xray(state.episodeId)).weeks, HORIZON);
@@ -83,8 +84,18 @@ const ui = new UI({
   onCommit: (qty, route, supplier) => guard(async () => {
     const wireRoute = qty ? routeForWire(state.semantics, route) : null;
     const wireSupplier = qty ? supplierForWire(state.semantics, supplier) : null;
-    const res = await api.step(state.episodeId, qty, wireRoute, wireSupplier);
-    store.applyObs(res.obs, res.cost);
+    // The act of sourcing IS contracting: if the chosen supplier has no
+    // open contract this week, auto-sign one in the same step (the engine
+    // mask refuses an uncontracted source -- this is the human's sign UI).
+    let contract = null;
+    if (qty && wireSupplier) {
+      const live = new Set((state.obs?.contracts ?? [])
+        .filter((c) => !(state.obs?.contractOpen ?? []).includes(c.supplier))
+        .map((c) => c.supplier));
+      if (!live.has(supplier)) contract = { action: 'sign', supplier: wireSupplier };
+    }
+    const res = await api.step(state.episodeId, qty, wireRoute, wireSupplier, contract);
+    state.obs = store.applyObs(res.obs, res.cost);
     state.totalCost = store.totalCost;
     state.done = res.done;
     ui.clearBriefing();

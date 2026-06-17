@@ -17,7 +17,8 @@ async function call(method, path, body) {
 
 export const api = {
   createEpisode: (seed, semantics, research) => call('POST', '/episodes', { seed, semantics, research_mode: research }),
-  step: (id, qty, route, supplier) => call('POST', `/episodes/${id}/step`, { qty, route, supplier }),
+  step: (id, qty, route, supplier, contract) =>
+    call('POST', `/episodes/${id}/step`, { qty, route, supplier, contract }),
   briefing: (id) => call('POST', `/episodes/${id}/briefing`),
   trace: (id) => call('GET', `/episodes/${id}/trace`),
   xray: (id) => call('GET', `/episodes/${id}/xray`),
