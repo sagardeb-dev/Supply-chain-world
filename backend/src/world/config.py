@@ -17,6 +17,15 @@ REGIME_COUNTS = {
 }
 CAPE_LOCAL_EXTRA = 21           # iid local Cape-port congestion, cape channel only
 
+# OTIF scorecard bands: noiseless readout of SupplierState.regime (factor 2).
+# "slipping" is SHARED by wobbling AND degraded-onset -- the supplier analogue
+# of the disruption "crash" ambiguity. (otif_pct, lead_days_quoted)
+SUPPLIER_SCORECARD = {
+    "ontime":   (98, 14),
+    "slipping": (82, 18),
+    "failing":  (55, 28),
+}
+
 
 @dataclass(frozen=True)
 class WorldConfig:
@@ -35,6 +44,18 @@ class WorldConfig:
     recovery_persist_prob: float = 0.50
     max_recovery_weeks: int = 3
     cape_local_prob: float = 0.08         # stochastic root #2: iid weekly coin
+
+    # --- supplier S reliability semi-Markov kernel (stochastic root #3) ---
+    # Fully independent of the disruption kernel (Becker transition independence):
+    # this factor's next state reads ONLY SupplierState. Its own latent module.
+    sup_onset_prob: float = 0.10          # reliable -> wobbling; spot sources drift
+    sup_wobble_to_degraded: float = 0.45  # the slip becomes real failure
+    sup_wobble_to_reliable: float = 0.35  # the slip recovers (a false scare)
+    sup_degraded_persist: float = 0.70    # degraded spells run ~3 wks
+    sup_max_degraded: int = 4
+    # --- supplier economics ---
+    spot_unit_discount: float = 1.5       # S is 1.5/unit cheaper than Q's lane cost
+    qualified_premium: float = 1.0        # Q adds 1.0/unit over the route base cost
 
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam

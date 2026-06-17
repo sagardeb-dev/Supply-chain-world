@@ -24,7 +24,7 @@ from src.world.state import HiddenState, SupplierState
 from src.world.causal_oracle import (EMPTY_PIPE, CausalOracle, canonical,
                                      causal_play, resolve_rel,
                                      transition_dist)
-from src.world.transition import step_hidden
+from src.world.transition import step_hidden, step_supplier
 
 
 CFG = WorldConfig()
@@ -728,3 +728,60 @@ def test_supplier_regime_and_fulfilment():
     assert sup_frac() == 1.0
     assert sup_frac(rel_state="wobbling") == 0.5
     assert sup_frac(rel_state="degraded") == 0.0
+
+
+
+def test_step_supplier_matches_hand_distribution():
+    """step_supplier's empirical transitions match the spec kernel (A3),
+    drawn from the World rng (exogeneity). Mirrors the disruption MC-pin."""
+    c = CFG
+    # expected next-rel_state distribution from each (rel_state, rel_age) core
+    expected = {
+        ("reliable", 0): {"reliable": 1 - c.sup_onset_prob,
+                          "wobbling": c.sup_onset_prob},
+        ("wobbling", 0): {"degraded": c.sup_wobble_to_degraded,
+                          "reliable": c.sup_wobble_to_reliable,
+                          "wobbling": 1 - c.sup_wobble_to_degraded
+                                        - c.sup_wobble_to_reliable},
+        ("degraded", 0): {"degraded": c.sup_degraded_persist,
+                          "reliable": 1 - c.sup_degraded_persist},
+        ("degraded", 1): {"degraded": c.sup_degraded_persist,
+                          "reliable": 1 - c.sup_degraded_persist},
+    }
+    rng = random.Random(0)
+    n = 20000
+    for (state, age), dist in expected.items():
+        seen = {}
+        s = SupplierState(rel_state=state, rel_age=age)
+        for _ in range(n):
+            s2 = step_supplier(s, rng, c)
+            seen[s2.rel_state] = seen.get(s2.rel_state, 0) + 1
+        assert set(seen) == set(dist), (state, age, set(seen))
+        for k, pexp in dist.items():
+            assert abs(seen[k] / n - pexp) < 0.02, (state, age, k)
+
+
+def test_step_supplier_degraded_forced_exit():
+    """A degraded spell cannot exceed sup_max_degraded: at the cap, the next
+    state is always reliable (the semi-Markov forced exit, like max_short)."""
+    rng = random.Random(1)
+    s = SupplierState(rel_state="degraded", rel_age=CFG.sup_max_degraded - 1)
+    for _ in range(2000):
+        assert step_supplier(s, rng, CFG).rel_state == "reliable"
+
+
+def test_step_supplier_ages_in_place():
+    """Staying in the same state increments rel_age; switching resets to 0."""
+    s = SupplierState(rel_state="degraded", rel_age=0)
+    # force a persist by exhausting rng draws that keep it degraded
+    rng = random.Random(7)
+    saw_persist = saw_exit = False
+    for _ in range(200):
+        s2 = step_supplier(s, rng, CFG)
+        if s2.rel_state == "degraded":
+            assert s2.rel_age == 1
+            saw_persist = True
+        else:
+            assert s2.rel_age == 0
+            saw_exit = True
+    assert saw_persist and saw_exit

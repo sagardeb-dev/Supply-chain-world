@@ -4,7 +4,7 @@ actions, so the trajectory is a function of the seed alone (exogeneity)."""
 import random
 
 from .config import WorldConfig
-from .state import HiddenState
+from .state import HiddenState, SupplierState
 
 
 def step_hidden(h: HiddenState, rng: random.Random, cfg: WorldConfig) -> HiddenState:
@@ -44,3 +44,30 @@ def step_hidden(h: HiddenState, rng: random.Random, cfg: WorldConfig) -> HiddenS
         disruption_type=ntype,
         cape_local_congestion=rng.random() < cfg.cape_local_prob,
     )
+
+
+def step_supplier(sup: SupplierState, rng: random.Random,
+                  cfg: WorldConfig) -> SupplierState:
+    """Advance the spot supplier's reliability factor. Sibling of step_hidden,
+    same rng (exogeneity: actions never consume it). Reads ONLY SupplierState
+    -- never the disruption state -- so the two latent modules are transition
+    independent (Becker Def. 2) and debuggable in isolation.
+
+    Runs UNCONDITIONALLY every week (the supplier drifts whether or not you
+    source from it), which is what makes the scorecard a free side-channel."""
+    s, age = sup.rel_state, sup.rel_age
+    if s == "reliable":
+        nxt = "wobbling" if rng.random() < cfg.sup_onset_prob else "reliable"
+    elif s == "wobbling":
+        r = rng.random()
+        if r < cfg.sup_wobble_to_degraded:
+            nxt = "degraded"
+        elif r < cfg.sup_wobble_to_degraded + cfg.sup_wobble_to_reliable:
+            nxt = "reliable"
+        else:
+            nxt = "wobbling"
+    else:  # degraded
+        over = (age + 1 >= cfg.sup_max_degraded
+                or rng.random() > cfg.sup_degraded_persist)
+        nxt = "reliable" if over else "degraded"
+    return SupplierState(rel_state=nxt, rel_age=0 if nxt != s else age + 1)
