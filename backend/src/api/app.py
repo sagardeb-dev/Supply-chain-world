@@ -45,6 +45,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="supply-chain-pomdp", lifespan=lifespan)
+
+
+# No-build frontend: tell browsers to always revalidate static assets so a
+# JS/CSS/HTML edit lands on the next load instead of being masked by a stale
+# module cache. etag/last-modified still make unchanged files a cheap 304.
+# ponytail: blanket no-cache is fine here -- this server is the dev/demo host,
+# not a CDN; switch to hashed filenames if it ever needs real cache lifetimes.
+@app.middleware("http")
+async def _no_cache_static(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 episodes: dict[str, World] = {}

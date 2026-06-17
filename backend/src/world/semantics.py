@@ -108,8 +108,8 @@ STATUS_DISPLAY = {
 # Supplier id + scorecard-band labels (factor 2). Same real/anon ablation
 # boundary as the routes: identical information, referents stripped in anon.
 SUPPLIER_DISPLAY = {
-    "real": {"qualified": "qualified", "spot": "spot"},
-    "anon": {"qualified": "source_a", "spot": "source_b"},
+    "real": {"qualified": "qualified", "spot": "spot", "backup": "backup"},
+    "anon": {"qualified": "source_a", "spot": "source_b", "backup": "source_c"},
 }
 SUPPLIER_PARSE = {mode: {v: k for k, v in d.items()}
                   for mode, d in SUPPLIER_DISPLAY.items()}

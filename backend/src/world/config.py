@@ -27,6 +27,22 @@ SUPPLIER_SCORECARD = {
 }
 
 
+# Per-supplier display profile (factor-2 roster). "drifts" suppliers read their
+# OTIF band from a SupplierState reliability chain (the scorecard regime);
+# frozen suppliers show a constant base OTIF. unit_delta is the +/- per unit vs
+# the route base cost (spot's is the NEGATIVE of its discount). onboard_weeks is
+# how long before the supplier's FIRST order can ship (0 = already qualified).
+# Adding supplier #4 = one entry here. This is "Nth costs the same as 2nd".
+SUPPLIERS = {
+    "qualified": {"drifts": False, "otif": 99, "lead": 14,
+                  "unit_delta": None, "onboard_weeks": 0},  # delta read from cfg
+    "spot":      {"drifts": True,  "otif": None, "lead": None,
+                  "unit_delta": None, "onboard_weeks": 0},  # band read from state
+    "backup":    {"drifts": False, "otif": None, "lead": None,
+                  "unit_delta": None, "onboard_weeks": None},  # read from cfg
+}
+
+
 @dataclass(frozen=True)
 class WorldConfig:
     horizon_weeks: int = 26
@@ -56,6 +72,11 @@ class WorldConfig:
     # --- supplier economics ---
     spot_unit_discount: float = 1.5       # S is 1.5/unit cheaper than Q's lane cost
     qualified_premium: float = 1.0        # Q adds 1.0/unit over the route base cost
+    # --- backup supplier (Hangzhou): mid OTIF, small premium, 1-wk onboarding ---
+    backup_base_otif: int = 95            # mid-tier, between spot(88) and qualified(98)
+    backup_lead_days: int = 16
+    backup_unit_delta: float = 0.3        # a small premium (dearer than spot, < Q)
+    backup_onboard_weeks: int = 1         # cannot ship its FIRST order for 1 wk (R-later)
     # The cost COUPLING knob (Becker JV term): a spot shortfall during a
     # disruption-active week is back-ordered at the crisis spot rate. Set to
     # 3x the stockout cost so gambling on spot when the Red Sea is twitchy is

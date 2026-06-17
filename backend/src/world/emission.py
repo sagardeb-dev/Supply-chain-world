@@ -3,7 +3,7 @@ on the visible regime, so every deviation from baseline is signal. The
 only ambiguity is the deliberate one: the shared "crash" fingerprint,
 mirrored byte-for-byte in the news bulletin (R1)."""
 
-from .config import (CAPE_LOCAL_EXTRA, REGIME_COUNTS,
+from .config import (CAPE_LOCAL_EXTRA, REGIME_COUNTS, SUPPLIERS,
                      SUPPLIER_SCORECARD, WorldConfig)
 from .semantics import BRIEFINGS, BULLETINS
 from .state import HiddenState, SupplierState
@@ -30,18 +30,36 @@ def analyst_briefing(h: HiddenState, cfg: WorldConfig) -> str:
     return BRIEFINGS[cfg.semantics][key]
 
 
-def observe_scorecard(sup: SupplierState, cfg: WorldConfig) -> dict:
-    """The supplier factor's emission: a noiseless OTIF scorecard, exactly
-    like observe_counts is for the disruption factor. A table lookup on the
-    spot supplier's visible band -- it NEVER reads the disruption state
-    (observation independence). Qualified (Q) is constant; spot (S) reflects
-    its hidden regime, with the deliberate 1-week 'slipping' ambiguity (A5)."""
-    s_otif, s_lead = SUPPLIER_SCORECARD[sup.regime]
-    return {
-        "suppliers": [
-            {"id": "qualified", "otif": 99, "lead_days": 14,
-             "unit_premium": cfg.qualified_premium},
-            {"id": "spot", "otif": s_otif, "lead_days": s_lead,
-             "unit_discount": cfg.spot_unit_discount},
-        ]
-    }
+def _supplier_row(sid: str, sup: SupplierState, cfg: WorldConfig) -> dict:
+    """One scorecard row. Drifting suppliers (spot) read their OTIF/lead from
+    the visible band of their reliability chain (the deliberate 1-week
+    'slipping' ambiguity lives here, A5); frozen suppliers show constants.
+    NEVER reads the disruption state (observation independence)."""
+    prof = SUPPLIERS[sid]
+    if prof["drifts"]:
+        otif, lead = SUPPLIER_SCORECARD[sup.regime]
+    elif sid == "qualified":
+        otif, lead = prof["otif"], prof["lead"]
+    else:  # backup
+        otif, lead = cfg.backup_base_otif, cfg.backup_lead_days
+    row = {"id": sid, "otif": otif, "lead_days": lead,
+           "onboard_lead": prof["onboard_weeks"]
+           if prof["onboard_weeks"] is not None else cfg.backup_onboard_weeks}
+    # unit economics, per supplier: spot discounts, qualified/backup add a delta
+    if sid == "spot":
+        row["unit_discount"] = cfg.spot_unit_discount
+        row["unit_delta"] = -cfg.spot_unit_discount
+    elif sid == "qualified":
+        row["unit_premium"] = cfg.qualified_premium
+        row["unit_delta"] = cfg.qualified_premium
+    else:  # backup
+        row["unit_delta"] = cfg.backup_unit_delta
+    return row
+
+
+def observe_scorecard(suppliers: dict, cfg: WorldConfig) -> dict:
+    """The supplier factor's emission: a noiseless OTIF scorecard over the
+    whole roster {id: SupplierState}, one row per supplier (A5). Order is
+    fixed (registry order) so the readout is stable for the agent."""
+    return {"suppliers": [_supplier_row(sid, suppliers[sid], cfg)
+                          for sid in SUPPLIERS if sid in suppliers]}

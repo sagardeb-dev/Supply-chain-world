@@ -798,16 +798,30 @@ def test_step_supplier_ages_in_place():
 
 
 
-def scorecard(**kw):
-    return observe_scorecard(SupplierState(**kw), CFG)
+def roster(**spot_kw):
+    """Build the 3-supplier roster with spot in the given hidden state and
+    qualified/backup at their frozen-reliable defaults."""
+    return {
+        "qualified": SupplierState(),
+        "spot": SupplierState(**spot_kw),
+        "backup": SupplierState(),
+    }
+
+
+def scorecard(**spot_kw):
+    return observe_scorecard(roster(**spot_kw), CFG)
+
+
+def _row(sc, sid):
+    return next(s for s in sc["suppliers"] if s["id"] == sid)
 
 
 def _spot(sc):
-    return next(s for s in sc["suppliers"] if s["id"] == "spot")
+    return _row(sc, "spot")
 
 
 def _qual(sc):
-    return next(s for s in sc["suppliers"] if s["id"] == "qualified")
+    return _row(sc, "qualified")
 
 
 def test_scorecard_structure_and_qualified_constant():
@@ -815,10 +829,21 @@ def test_scorecard_structure_and_qualified_constant():
     state; spot reflects its regime band (A5)."""
     for state in ("reliable", "wobbling", "degraded"):
         sc = scorecard(rel_state=state)
-        assert {s["id"] for s in sc["suppliers"]} == {"qualified", "spot"}
+        assert {s["id"] for s in sc["suppliers"]} == {"qualified", "spot", "backup"}
         q = _qual(sc)
         assert q["otif"] == 99 and q["lead_days"] == 14
         assert q["unit_premium"] == CFG.qualified_premium
+
+
+def test_scorecard_backup_present_and_mid_tier():
+    """R1: the roster gains backup (Hangzhou). Mid OTIF (95), its own
+    unit delta, and a 1-week onboarding lead. Frozen-reliable in R1."""
+    sc = scorecard()
+    b = _row(sc, "backup")
+    assert b["otif"] == 95
+    assert b["onboard_lead"] == CFG.backup_onboard_weeks
+    # backup is mid-priced: a small premium, not spot's discount
+    assert b["unit_delta"] == CFG.backup_unit_delta
 
 
 def test_scorecard_spot_reflects_regime_band():
@@ -944,7 +969,7 @@ def test_step_accepts_supplier_and_emits_scorecard():
     obs0 = world.reset(3)
     assert "suppliers" in obs0  # scorecard present from week 0
     ids = {s["id"] for s in obs0["suppliers"]}
-    assert ids == {"qualified", "spot"}
+    assert ids == {"qualified", "spot", "backup"}
     obs, _, _, _ = world.step({"qty": 20, "supplier": "spot", "route": "suez"})
     assert "suppliers" in obs
 

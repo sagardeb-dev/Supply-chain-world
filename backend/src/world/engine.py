@@ -6,7 +6,7 @@ only in _build_obs (R4)."""
 
 import random
 
-from .config import WorldConfig
+from .config import SUPPLIERS, WorldConfig
 from .emission import (analyst_briefing, news_bulletin, observe_counts,
                        observe_scorecard)
 from .logistics import Books, resolve_week
@@ -29,7 +29,9 @@ class World:
         self.rng = random.Random(seed)
         self.week = 0
         self.hidden = HiddenState()
-        self.supplier = SupplierState()  # second latent factor
+        # factor-2 roster: one reliability chain per supplier. qualified &
+        # backup are frozen-reliable in R1; only spot drifts (R2 adds defunct).
+        self.suppliers = {sid: SupplierState() for sid in SUPPLIERS}
         self.books = Books(inventory=self.cfg.initial_inventory)
         self.done = False
         self.total_cost = 0.0
@@ -74,10 +76,12 @@ class World:
 
         self.week += 1
         self.hidden = step_hidden(self.hidden, self.rng, self.cfg)
-        self.supplier = step_supplier(self.supplier, self.rng, self.cfg)
+        # only spot drifts in R1; advance it, leave qualified/backup frozen.
+        self.suppliers["spot"] = step_supplier(
+            self.suppliers["spot"], self.rng, self.cfg)
         arrived, costs = resolve_week(
             self.books, qty, supplier if qty else None,
-            route if qty else None, self.hidden, self.supplier,
+            route if qty else None, self.hidden, self.suppliers["spot"],
             self.week, self.cfg)
         if briefed:
             costs["briefing"] = self.cfg.briefing_cost
@@ -106,7 +110,7 @@ class World:
             "arrived": arrived,
             "pipeline": [self._display_shipment(s) for s in self.books.pipeline],
             "cost_breakdown": dict(costs),
-            **observe_scorecard(self.supplier, self.cfg),  # {"suppliers": [...]}
+            **observe_scorecard(self.suppliers, self.cfg),  # {"suppliers": [...]}
         }
         assert not (HIDDEN_KEYS & obs.keys()), "hidden state leaked into observation"
         return obs
