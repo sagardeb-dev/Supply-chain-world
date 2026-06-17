@@ -13,7 +13,26 @@ const state = {
   totalCost: 0,
   done: false,
   busy: false,
+  research: false,
+  seed: null,
 };
+
+// The oracle solves lazily server-side (~2 min on first request, then
+// cached). Poll until ready and fill the scoreboard in progressively;
+// the reveal never blocks on it.
+async function pollBenchmark(seed, yourCost, tries = 0) {
+  try {
+    const data = await api.benchmark(seed);
+    if (data.status === 'solving' && tries < 40) {
+      ui.showBenchmark(null, yourCost);
+      setTimeout(() => pollBenchmark(seed, yourCost, tries + 1), 5000);
+      return;
+    }
+    ui.showBenchmark(data, yourCost);
+  } catch (err) {
+    console.error(err);
+  }
+}
 
 async function guard(fn) {
   if (state.busy) return;
@@ -31,12 +50,14 @@ async function guard(fn) {
 }
 
 const ui = new UI({
-  async onStart(seed, semantics) {
+  async onStart(seed, semantics, research) {
     if (!Number.isFinite(seed)) return ui.startError('seed must be a number');
     try {
-      const res = await api.createEpisode(seed, semantics);
+      const res = await api.createEpisode(seed, semantics, research);
       state.episodeId = res.episode_id;
       state.semantics = semantics;
+      state.research = research;
+      state.seed = seed;
       state.totalCost = 0;
       state.done = false;
       const labels = LABELS[semantics];
@@ -45,6 +66,10 @@ const ui = new UI({
       const obs = normalizeObs(res.obs, semantics);
       scene.reset(obs);
       ui.update(obs, 0, HORIZON);
+      if (research) {
+        document.getElementById('xray-rail')?.classList.remove('hidden');
+        ui.updateRail((await api.xray(state.episodeId)).weeks, HORIZON);
+      }
     } catch (err) {
       ui.startError(err.message.includes('fetch')
         ? 'backend unreachable — is uvicorn running?' : err.message);
@@ -65,11 +90,17 @@ const ui = new UI({
     const obs = normalizeObs(res.obs, state.semantics);
     scene.applyObs(obs);
     ui.update(obs, state.totalCost, HORIZON);
+    if (state.research) {
+      ui.updateRail((await api.xray(state.episodeId)).weeks, HORIZON);
+    }
     if (res.done) {
+      const finalCost = state.totalCost;
+      const seed = state.seed;
       // let the final sail-in play out before the reveal
       setTimeout(async () => {
         const trace = await api.trace(state.episodeId);
         ui.showEnd(trace);
+        pollBenchmark(seed, finalCost);
       }, 1600);
     }
   }),

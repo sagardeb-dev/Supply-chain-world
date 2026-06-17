@@ -7,6 +7,17 @@ const REGIME_COLORS = {
   blockage: '#9333ea', crisis: '#dc2626', recovery: '#2e7fb8',
 };
 
+// One week-cell for a regime strip (shared by the x-ray rail and the
+// end-of-episode reveal). `marks` is an optional short overlay string.
+function regimeCell(week, regime, tip, marks = '') {
+  const cell = document.createElement('div');
+  cell.className = 'wk';
+  cell.style.background = REGIME_COLORS[regime] ?? '#333';
+  cell.innerHTML = `<span class="marks">${marks}</span>${week}`;
+  cell.title = tip;
+  return cell;
+}
+
 export class UI {
   constructor(handlers) {
     this.handlers = handlers;
@@ -29,7 +40,7 @@ export class UI {
     $('btn-commit').addEventListener('click', () => handlers.onCommit(this.qty, this.route));
     $('btn-briefing').addEventListener('click', handlers.onBriefing);
     $('btn-start').addEventListener('click', () => handlers.onStart(
-      Number($('inp-seed').value), $('inp-semantics').value));
+      Number($('inp-seed').value), $('inp-semantics').value, $('inp-research').checked));
     $('btn-new-episode').addEventListener('click', () => this.showNewModal());
     $('btn-again').addEventListener('click', () => {
       $('modal-end').classList.add('hidden');
@@ -51,6 +62,7 @@ export class UI {
 
   // episode started — reveal the HUD, adapt labels to the semantics mode
   beginEpisode(labels) {
+    $('xray-rail').classList.add('hidden');
     this.routeLabels = { suez: labels.routeSuez, cape: labels.routeCape };
     const [sBtn, cBtn] = $('route-seg').querySelectorAll('button');
     sBtn.firstChild.textContent = labels.routeSuez;
@@ -139,25 +151,89 @@ export class UI {
     strip.innerHTML = '';
     for (const rec of traceData.trace) {
       const h = rec.hidden;
-      const cell = document.createElement('div');
-      cell.className = 'wk';
-      cell.style.background = REGIME_COLORS[h.regime] ?? '#333';
       const marks = [];
       if (rec.action?.briefing) marks.push('B');
       if (rec.action?.qty) marks.push(rec.action.route?.[0]?.toUpperCase() ?? '?');
-      cell.innerHTML = `<span class="marks">${marks.join('')}</span>${rec.week}`;
       let tip = `week ${rec.week}: ${h.event_state}`;
       if (h.disruption_type) tip += ` (${h.disruption_type})`;
       if (h.cape_local_congestion) tip += ' + cape congestion';
       if (rec.action?.qty) tip += ` — ordered ${rec.action.qty} via ${rec.action.route}`;
       if (rec.action?.briefing) tip += ' — bought briefing';
-      cell.title = tip;
-      strip.appendChild(cell);
+      strip.appendChild(regimeCell(rec.week, h.regime, tip, marks.join('')));
     }
     const legend = $('trace-legend');
     legend.innerHTML = Object.entries(REGIME_COLORS)
       .map(([k, c]) => `<span><i style="background:${c}"></i>${k}</span>`)
       .join('') + '<span><b>B</b> = briefing, <b>S/C</b> = order route</span>';
     $('modal-end').classList.remove('hidden');
+  }
+
+  // The regret scoreboard: your cost between the clairvoyant lower bound
+  // and the best naive policy, anchored on the causal oracle. Decomposes
+  // your gap into skill (vs the oracle) and luck (oracle vs clairvoyant).
+  showBenchmark(data, yourCost) {
+    const board = $('scoreboard');
+    if (!data || data.status === 'solving') {
+      board.innerHTML = '<span class="dim">oracle solving — first run takes ~2 min…</span>';
+      return;
+    }
+    const rows = [
+      ['clairvoyant', data.clairvoyant, 'lower bound (sees the future)'],
+      ['causal oracle', data.causal, 'the anchor (best play without the future)'],
+      ['you', yourCost, ''],
+      ['best naive', data.naive_min, 'best fixed policy'],
+    ];
+    const max = Math.max(...rows.map(([, v]) => v));
+    board.innerHTML = rows.map(([label, v, note]) => `
+      <div class="bench-row ${label === 'you' ? 'you' : ''}">
+        <span class="bench-label">${label}</span>
+        <span class="bench-bar"><i style="width:${(v / max) * 100}%"></i></span>
+        <span class="bench-val">$${Math.round(v)}</span>
+        <span class="bench-note">${note}</span>
+      </div>`).join('');
+    const skill = Math.round(yourCost - data.causal);
+    const luck = Math.round(data.luck_premium);
+    board.innerHTML += `<div class="bench-decomp">your regret vs the oracle =
+      <b>$${skill}</b> (skill) · oracle − clairvoyant = <b>$${luck}</b> (luck premium)</div>`;
+
+    // the oracle's weekly plan, same seed — its own strip of cells
+    const strip = $('ghost-strip');
+    strip.innerHTML = '';
+    for (const r of data.plan) {
+      const marks = [];
+      if (r.briefed) marks.push('B');
+      if (r.qty) marks.push((r.route?.[0] ?? '?').toUpperCase());
+      const cell = document.createElement('div');
+      cell.className = 'wk ghost';
+      cell.innerHTML = `<span class="marks">${marks.join('')}</span>${r.week}`;
+      cell.title = `week ${r.week}: ` + (r.qty
+        ? `ordered ${r.qty} via ${r.route}` : 'held')
+        + (r.briefed ? ' · bought briefing' : '');
+      strip.appendChild(cell);
+    }
+    const briefs = data.plan.filter(r => r.briefed).length;
+    $('ghost-caption').textContent =
+      `the causal oracle's plan for seed ${data.seed} — it bought ${briefs} briefings`
+      + (briefs === 0 ? ' (the chokepoint leak is free information)' : '');
+  }
+
+  // Live hidden tape for research-mode episodes. Revealed weeks show the
+  // regime colour with the in-state age as a superscript; future weeks
+  // stay neutral. Age is the semi-Markov clock — what makes duration
+  // inferable from a sequence of identical-looking weeks.
+  updateRail(weeks, horizon) {
+    const strip = $('xray-strip');
+    strip.innerHTML = '';
+    for (const w of weeks) {
+      const tip = `week ${w.week}: ${w.regime} (age ${w.event_age})`
+        + (w.disruption_type ? ` · ${w.disruption_type}` : '');
+      strip.appendChild(regimeCell(w.week, w.regime, tip, String(w.event_age)));
+    }
+    for (let wk = weeks.length; wk <= horizon; wk++) {
+      const cell = document.createElement('div');
+      cell.className = 'wk future';
+      cell.innerHTML = `<span class="marks"></span>?`;
+      strip.appendChild(cell);
+    }
   }
 }

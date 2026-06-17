@@ -468,3 +468,55 @@ def test_causal_oracle_within_bounds(causal):
         clair, _ = oracle_plan(seed, CFG)
         assert cost >= clair - 1e-6, seed
         assert all(r["belief_support"] <= 3 for r in rows), seed
+
+
+# --- research surface (read-only API for the explainer UI) ---------------
+
+def test_xray_gating_and_content():
+    """The hidden tape is reachable live ONLY for research_mode episodes
+    (the gate is set at creation, so an agent's episode physically cannot
+    peek); benchmark episodes get a 403. Anon episodes still expose the
+    canonical hidden state at /xray (an analysis-side artifact, R4)."""
+    client = TestClient(app)
+
+    # a normal (benchmark) episode cannot be x-rayed
+    eid = client.post("/episodes", json={"seed": 5}).json()["episode_id"]
+    assert client.get(f"/episodes/{eid}/xray").status_code == 403
+
+    # a research episode can, and the tape grows as the episode advances
+    rid = client.post("/episodes",
+                      json={"seed": 5, "research_mode": True}).json()["episode_id"]
+    wk0 = client.get(f"/episodes/{rid}/xray").json()["weeks"]
+    assert len(wk0) == 1
+    assert wk0[0]["event_state"] == "calm"
+    assert "event_age" in wk0[0] and "disruption_type" in wk0[0]
+    client.post(f"/episodes/{rid}/step", json={"qty": 20, "route": "suez"})
+    assert len(client.get(f"/episodes/{rid}/xray").json()["weeks"]) == 2
+
+    # anon research episode: hidden state stays canonical at /xray
+    aid = client.post("/episodes",
+                      json={"seed": 5, "semantics": "anon",
+                            "research_mode": True}).json()["episode_id"]
+    assert "event_state" in client.get(f"/episodes/{aid}/xray").json()["weeks"][0]
+
+
+def test_benchmark_endpoint(causal):
+    """The benchmark anchor set for a seed. The 122 s solve is bypassed by
+    injecting the module-scoped causal fixture as the cached oracle."""
+    import src.api.app as appmod
+
+    saved = appmod._bench
+    appmod._bench = {"status": "ready", "oracle": causal, "per_seed": {},
+                     "lock": saved["lock"], "error": None}
+    try:
+        client = TestClient(app)
+        body = client.get("/benchmark/3").json()
+        assert body["status"] == "ready" and body["seed"] == 3
+        assert body["causal"] >= body["clairvoyant"] - 1e-6
+        assert body["naive_min"] == min(body["suez20"], body["cape20"],
+                                        body["basestock"])
+        assert body["luck_premium"] == body["causal"] - body["clairvoyant"]
+        assert len(body["plan"]) == CFG.horizon_weeks
+        assert client.get("/benchmark/-1").status_code == 422
+    finally:
+        appmod._bench = saved

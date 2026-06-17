@@ -1,30 +1,38 @@
 """HTTP boundary for the world engine. Session-keyed episodes so a
 frontend or agent harness can drive reset/briefing/step; the hidden
-trace is only served after the episode ends. Route names are translated
+trace is only served after the episode ends (live via /xray for
+research_mode episodes only). Route names are translated
 to/from the episode's semantics vocabulary here (R4) - the engine only
 ever sees canonical names."""
 
+import threading
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.world import World, WorldConfig
+from src.world.causal_oracle import CausalOracle, causal_play
+from src.world.oracle import oracle_plan
 from src.world.semantics import ROUTE_PARSE
+from report_oracle import fixed_policy_cost, base_stock_cost
 
 app = FastAPI(title="supply-chain-pomdp")
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 episodes: dict[str, World] = {}
+research_ids: set[str] = set()
 
 
 class ResetRequest(BaseModel):
     seed: int
     semantics: Literal["real", "anon"] = "real"
+    research_mode: bool = False
 
 
 class ResetResponse(BaseModel):
@@ -62,6 +70,8 @@ def create_episode(req: ResetRequest) -> ResetResponse:
     obs = world.reset(req.seed)
     episode_id = uuid4().hex
     episodes[episode_id] = world
+    if req.research_mode:
+        research_ids.add(episode_id)
     return ResetResponse(episode_id=episode_id, obs=obs)
 
 
@@ -96,6 +106,62 @@ def episode_trace(episode_id: str) -> dict:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "trace available only after the episode ends")
     return {"total_cost": world.total_cost, "trace": world.trace}
+
+
+@app.get("/episodes/{episode_id}/xray")
+def episode_xray(episode_id: str) -> dict:
+    world = _get(episode_id)
+    if episode_id not in research_ids:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "xray requires a research_mode episode")
+    return {"weeks": [{"week": rec["week"], **rec["hidden"]}
+                      for rec in world.trace]}
+
+
+_bench = {"status": "unsolved", "oracle": None, "per_seed": {},
+          "lock": threading.Lock(), "error": None}
+
+
+def _solve_oracle() -> None:
+    try:
+        oracle = CausalOracle(WorldConfig())
+        oracle.value()  # forces the exact solve (~122 s, once per process)
+        _bench["oracle"] = oracle
+        _bench["status"] = "ready"
+    except Exception as exc:  # surfaced as a 500 by the endpoint
+        _bench["error"] = repr(exc)
+        _bench["status"] = "error"
+
+
+@app.get("/benchmark/{seed}")
+def benchmark(seed: int) -> JSONResponse:
+    if not (0 <= seed <= 1_000_000_000):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                            "seed out of range")
+    with _bench["lock"]:
+        if _bench["status"] == "unsolved":
+            _bench["status"] = "solving"
+            threading.Thread(target=_solve_oracle, daemon=True).start()
+    if _bench["status"] == "solving":
+        return JSONResponse(status_code=202, content={"status": "solving"})
+    if _bench["status"] == "error":
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            f"oracle solve failed: {_bench['error']}")
+    if seed not in _bench["per_seed"]:
+        cfg = WorldConfig()
+        clairvoyant, _plan = oracle_plan(seed, cfg)
+        causal, rows = causal_play(seed, cfg, _bench["oracle"])
+        suez20 = fixed_policy_cost(seed, "suez", cfg)
+        cape20 = fixed_policy_cost(seed, "cape", cfg)
+        basestock = base_stock_cost(seed, cfg)
+        _bench["per_seed"][seed] = {
+            "status": "ready", "seed": seed,
+            "clairvoyant": clairvoyant, "causal": causal,
+            "suez20": suez20, "cape20": cape20, "basestock": basestock,
+            "naive_min": min(suez20, cape20, basestock),
+            "luck_premium": causal - clairvoyant, "plan": rows,
+        }
+    return JSONResponse(content=_bench["per_seed"][seed])
 
 
 # Serve the Three.js frontend (if present) from the same origin. Mounted
