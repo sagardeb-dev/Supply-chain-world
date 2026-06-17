@@ -104,3 +104,14 @@ STATUS_DISPLAY = {
     "anon": {"at_sea": "at_sea", "queued_at_suez": "queued_at_waterway1",
              "diverted_via_cape": "diverted_via_waterway2"},
 }
+
+# Supplier id + scorecard-band labels (factor 2). Same real/anon ablation
+# boundary as the routes: identical information, referents stripped in anon.
+SUPPLIER_DISPLAY = {
+    "real": {"qualified": "qualified", "spot": "spot"},
+    "anon": {"qualified": "source_a", "spot": "source_b"},
+}
+SUPPLIER_BAND_DISPLAY = {
+    "real": {"ontime": "ontime", "slipping": "slipping", "failing": "failing"},
+    "anon": {"ontime": "band_0", "slipping": "band_1", "failing": "band_2"},
+}

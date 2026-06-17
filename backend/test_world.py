@@ -15,7 +15,8 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.world import World, WorldConfig
-from src.world.emission import analyst_briefing, news_bulletin, observe_counts
+from src.world.emission import (analyst_briefing, news_bulletin,
+                               observe_counts, observe_scorecard)
 from src.world.engine import HIDDEN_KEYS
 from src.world.logistics import Books, resolve_week
 from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
@@ -785,3 +786,45 @@ def test_step_supplier_ages_in_place():
             assert s2.rel_age == 0
             saw_exit = True
     assert saw_persist and saw_exit
+
+
+
+def scorecard(**kw):
+    return observe_scorecard(SupplierState(**kw), CFG)
+
+
+def _spot(sc):
+    return next(s for s in sc["suppliers"] if s["id"] == "spot")
+
+
+def _qual(sc):
+    return next(s for s in sc["suppliers"] if s["id"] == "qualified")
+
+
+def test_scorecard_structure_and_qualified_constant():
+    """Two suppliers; qualified is constant regardless of the hidden spot
+    state; spot reflects its regime band (A5)."""
+    for state in ("reliable", "wobbling", "degraded"):
+        sc = scorecard(rel_state=state)
+        assert {s["id"] for s in sc["suppliers"]} == {"qualified", "spot"}
+        q = _qual(sc)
+        assert q["otif"] == 99 and q["lead_days"] == 14
+        assert q["unit_premium"] == CFG.qualified_premium
+
+
+def test_scorecard_spot_reflects_regime_band():
+    assert _spot(scorecard(rel_state="reliable"))["otif"] == 98
+    assert _spot(scorecard(rel_state="wobbling"))["otif"] == 82
+    assert _spot(scorecard(rel_state="degraded", rel_age=1))["otif"] == 55
+    assert _spot(scorecard(rel_state="reliable"))["unit_discount"] == CFG.spot_unit_discount
+
+
+def test_scorecard_slipping_ambiguity():
+    """The supplier analogue of the crash ambiguity: wobbling and the onset
+    week of degraded produce a BYTE-IDENTICAL spot scorecard row (slipping),
+    separating one week later when degraded ages into failing."""
+    wob = _spot(scorecard(rel_state="wobbling"))
+    deg0 = _spot(scorecard(rel_state="degraded", rel_age=0))
+    deg1 = _spot(scorecard(rel_state="degraded", rel_age=1))
+    assert wob == deg0, "wobbling and degraded-onset must be indistinguishable"
+    assert wob != deg1, "they must separate one week later"
