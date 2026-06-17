@@ -42,6 +42,9 @@ class Books:
     def __init__(self, inventory: int):
         self.inventory = inventory
         self.pipeline: list[Shipment] = []
+        self.contracts = []  # list[Contract]; an INSTANCE list, so holding two
+                             # live contracts at once (dual-sourcing, R6) is legal
+                             # by data shape, not a special case.
 
 
 def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> float:

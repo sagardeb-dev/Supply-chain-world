@@ -19,6 +19,7 @@ from src.world.emission import (analyst_briefing, news_bulletin,
                                observe_counts, observe_scorecard)
 from src.world.engine import HIDDEN_KEYS
 from src.world.logistics import Books, resolve_week
+from src.world.contracts import Contract, contract_open
 from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
 from src.world.semantics import BULLETINS
 from src.world.state import HiddenState, SupplierState
@@ -1045,3 +1046,41 @@ def test_supplier_action_does_not_perturb_either_hidden_trajectory():
 
 def test_same_seed_same_two_factor_trace():
     assert _spot_episode(7).trace == _spot_episode(7).trace
+
+
+# --- R3: contracts (a timer + terms; observed deterministic structure) -----
+
+def test_contract_fields_and_books_list():
+    """A Contract carries supplier, the tick window, and terms. Books holds a
+    list of them (instance list, not a singleton -> dual-sourcing is legal by
+    data shape, R6)."""
+    c = Contract(supplier="spot", start_week=2, end_week=8,
+                 unit_price=4.0, otif_floor=85, break_fee=10.0)
+    assert c.supplier == "spot" and c.start_week == 2 and c.end_week == 8
+    books = Books(inventory=0)
+    assert books.contracts == []
+    books.contracts.append(c)
+    assert books.contracts[0] is c
+
+
+def test_contract_open_when_expired():
+    """The standing rule's predicate: a contract is OPEN (needs renewal) once
+    week >= end_week. A condition, never a hard-coded date."""
+    c = Contract(supplier="spot", start_week=0, end_week=5,
+                 unit_price=4.0, otif_floor=85, break_fee=10.0)
+    alive = {"spot": True, "qualified": True, "backup": True}
+    assert not contract_open(c, week=4, alive=alive)
+    assert contract_open(c, week=5, alive=alive)
+    assert contract_open(c, week=9, alive=alive)
+
+
+def test_contract_open_when_counterparty_defunct():
+    """The EMERGENCE hook: a live (un-expired) contract becomes OPEN the moment
+    its supplier is defunct -- so the defunct primitive (R2) triggers renewal
+    with no scenario code. This is Lever-1 meeting Lever-2."""
+    c = Contract(supplier="spot", start_week=0, end_week=20,
+                 unit_price=4.0, otif_floor=85, break_fee=10.0)
+    alive_ok = {"spot": True, "qualified": True, "backup": True}
+    alive_dead = {"spot": False, "qualified": True, "backup": True}
+    assert not contract_open(c, week=3, alive=alive_ok)   # mid-lock, supplier alive
+    assert contract_open(c, week=3, alive=alive_dead)     # supplier died -> open!
