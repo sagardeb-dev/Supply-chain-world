@@ -65,6 +65,12 @@ export class Store {
       week: 0, suezCount: 70, babCount: 70, capeCount: 60,
       bulletin: '', inventory: 80, arrived: 0,
       costs: {}, pipeline: [],
+      // factor 2 calm default: both suppliers nominal, nothing sourced yet
+      suppliers: [
+        { id: 'qualified', otif: 99, leadDays: 14, unitDelta: 1.0 },
+        { id: 'spot', otif: 98, leadDays: 14, unitDelta: -1.5 },
+      ],
+      sourcing: null,
     };
   }
 }

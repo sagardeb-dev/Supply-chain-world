@@ -23,7 +23,9 @@ export class UI {
     this.handlers = handlers;
     this.qty = 0;
     this.route = 'suez';
+    this.supplier = 'qualified';
     this.routeLabels = { suez: 'Suez', cape: 'Cape' };
+    this.supplierLabels = { qualified: 'Qualified', spot: 'Spot' };
 
     $('qty-seg').addEventListener('click', (e) => {
       const btn = e.target.closest('button');
@@ -37,7 +39,14 @@ export class UI {
       this.route = btn.dataset.route;
       this.syncDeck();
     });
-    $('btn-commit').addEventListener('click', () => handlers.onCommit(this.qty, this.route));
+    $('supplier-seg').addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn || btn.disabled) return;
+      this.supplier = btn.dataset.supplier;
+      this.syncDeck();
+    });
+    $('btn-commit').addEventListener('click',
+      () => handlers.onCommit(this.qty, this.route, this.supplier));
     $('btn-briefing').addEventListener('click', handlers.onBriefing);
     $('btn-start').addEventListener('click', () => handlers.onStart(
       Number($('inp-seed').value), $('inp-semantics').value, $('inp-research').checked));
@@ -64,15 +73,20 @@ export class UI {
   beginEpisode(labels) {
     $('xray-rail').classList.add('hidden');
     this.routeLabels = { suez: labels.routeSuez, cape: labels.routeCape };
+    this.supplierLabels = { qualified: labels.supQualified, spot: labels.supSpot };
     const [sBtn, cBtn] = $('route-seg').querySelectorAll('button');
     sBtn.firstChild.textContent = labels.routeSuez;
     cBtn.firstChild.textContent = labels.routeCape;
+    const [qBtn, pBtn] = $('supplier-seg').querySelectorAll('button');
+    qBtn.firstChild.textContent = labels.supQualified;
+    pBtn.firstChild.textContent = labels.supSpot;
     $('modal-new').classList.add('hidden');
     for (const id of ['week-pill', 'total-cost', 'news', 'books', 'deck']) {
       $(id).classList.remove('hidden');
     }
     this.qty = 0;
     this.route = 'suez';
+    this.supplier = 'qualified';
     this.clearBriefing();
     this.syncDeck();
   }
@@ -84,6 +98,11 @@ export class UI {
     for (const b of $('route-seg').querySelectorAll('button')) {
       b.disabled = this.qty === 0;
       b.classList.toggle('active', this.qty !== 0 && b.dataset.route === this.route);
+    }
+    for (const b of $('supplier-seg').querySelectorAll('button')) {
+      b.disabled = this.qty === 0;
+      b.classList.toggle('active',
+        this.qty !== 0 && b.dataset.supplier === this.supplier);
     }
   }
 
@@ -142,9 +161,34 @@ export class UI {
     if (!entries.length) chips.innerHTML = '<span class="dim">—</span>';
     for (const [k, v] of entries) {
       const chip = document.createElement('span');
-      chip.className = `chip ${k === 'stockout' || k === 'surcharge' ? 'bad' : ''}`;
+      chip.className = `chip ${k === 'stockout' || k === 'surcharge' || k === 'couple' ? 'bad' : ''}`;
       chip.textContent = `${k.replace('_', ' ')} $${Math.round(v)}`;
       chips.appendChild(chip);
+    }
+
+    this._renderScorecard(obs);
+  }
+
+  // factor 2 HUD: a two-row OTIF scorecard. Severity accent by OTIF band
+  // (green >=95 / amber 80-94 / red <80); the amber 'slipping' band is the
+  // visible 1-week ambiguity. The sourced supplier gets a "<- sourced" mark.
+  _renderScorecard(obs) {
+    const rows = $('scorecard-rows');
+    if (!rows) return;
+    rows.innerHTML = '';
+    const sourced = obs.sourcing?.supplier ?? null;
+    for (const s of obs.suppliers ?? []) {
+      const band = s.otif >= 95 ? '' : s.otif >= 80 ? 'level-warn' : 'level-alert';
+      const li = document.createElement('div');
+      li.className = `sc-row ${band} ${s.id === sourced ? 'sourced' : ''}`;
+      const name = this.supplierLabels[s.id] ?? s.id;
+      const delta = s.unitDelta >= 0 ? `+$${s.unitDelta}` : `−$${Math.abs(s.unitDelta)}`;
+      const mark = s.id === sourced ? '<span class="sc-mark">← sourced</span>' : '';
+      li.innerHTML = `<span class="sc-name">${name}</span>
+        <span class="sc-otif">OTIF ${s.otif}%</span>
+        <span class="sc-lead">lead ${s.leadDays}d</span>
+        <span class="sc-unit">${delta}/u</span>${mark}`;
+      rows.appendChild(li);
     }
   }
 

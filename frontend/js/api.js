@@ -17,7 +17,7 @@ async function call(method, path, body) {
 
 export const api = {
   createEpisode: (seed, semantics, research) => call('POST', '/episodes', { seed, semantics, research_mode: research }),
-  step: (id, qty, route) => call('POST', `/episodes/${id}/step`, { qty, route }),
+  step: (id, qty, route, supplier) => call('POST', `/episodes/${id}/step`, { qty, route, supplier }),
   briefing: (id) => call('POST', `/episodes/${id}/briefing`),
   trace: (id) => call('GET', `/episodes/${id}/trace`),
   xray: (id) => call('GET', `/episodes/${id}/xray`),
@@ -34,21 +34,32 @@ const ROUTE_SEND = {
   anon: { suez: 'route_1', cape: 'route_2' },
 };
 
+const SUPPLIER_SEND = {
+  real: { qualified: 'qualified', spot: 'spot' },
+  anon: { qualified: 'source_a', spot: 'source_b' },
+};
+
 export const LABELS = {
   real: {
     suez: 'Suez Canal', bab: 'Bab el-Mandeb', cape: 'Cape of Good Hope',
     routeSuez: 'Suez', routeCape: 'Cape',
     origin: 'Shanghai', dest: 'Rotterdam',
+    supQualified: 'Qualified', supSpot: 'Spot',
   },
   anon: {
     suez: 'Waterway One', bab: 'The Strait', cape: 'Waterway Two',
     routeSuez: 'Waterway 1', routeCape: 'Waterway 2',
     origin: 'Origin Port', dest: 'Destination',
+    supQualified: 'Source A', supSpot: 'Source B',
   },
 };
 
 export function routeForWire(semantics, canonical) {
   return ROUTE_SEND[semantics][canonical];
+}
+
+export function supplierForWire(semantics, canonical) {
+  return SUPPLIER_SEND[semantics][canonical];
 }
 
 export function normalizeObs(obs, semantics) {
@@ -67,8 +78,32 @@ export function normalizeObs(obs, semantics) {
       dispatched: s.dispatched_week,
       eta: s.eta,
       route: s.route === 'route_2' || s.route === 'cape' ? 'cape' : 'suez',
+      supplier: canonicalSupplier(s.supplier),
       status: s.status.startsWith('queued') ? 'queued'
         : s.status.startsWith('diverted') ? 'diverted' : 'at_sea',
     })),
+    // factor 2: the OTIF scorecard (canonical ids), and what was sourced
+    // this week derived from the newest shipment (an action fact, not an
+    // emission fact — see spec A5).
+    suppliers: (obs.suppliers ?? []).map((s) => ({
+      id: canonicalSupplier(s.id),
+      otif: s.otif,
+      leadDays: s.lead_days,
+      unitDelta: s.unit_discount != null ? -s.unit_discount : s.unit_premium,
+    })),
+    sourcing: sourcingFromPipeline(obs.pipeline, obs.week),
   };
+}
+
+// anon source_a/source_b (or already-canonical) -> qualified/spot
+function canonicalSupplier(id) {
+  return (id === 'source_b' || id === 'spot') ? 'spot' : 'qualified';
+}
+
+// The newest shipment dispatched THIS week tells us which supplier was
+// sourced and how much actually shipped vs ordered. null if nothing shipped.
+function sourcingFromPipeline(pipeline, week) {
+  const fresh = pipeline.find((s) => s.dispatched_week === week);
+  if (!fresh) return null;
+  return { supplier: canonicalSupplier(fresh.supplier), shipped: fresh.qty };
 }

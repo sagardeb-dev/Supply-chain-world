@@ -1,5 +1,5 @@
 // Episode controller: wires the API, the Three.js scene, and the HUD.
-import { api, LABELS, routeForWire } from './api.js';
+import { api, LABELS, routeForWire, supplierForWire } from './api.js';
 import { SceneView } from './scene.js';
 import { UI } from './ui.js';
 import { AgentPanel } from './agent.js';
@@ -80,9 +80,10 @@ const ui = new UI({
     ui.showBriefing(res.briefing);
   }),
 
-  onCommit: (qty, route) => guard(async () => {
+  onCommit: (qty, route, supplier) => guard(async () => {
     const wireRoute = qty ? routeForWire(state.semantics, route) : null;
-    const res = await api.step(state.episodeId, qty, wireRoute);
+    const wireSupplier = qty ? supplierForWire(state.semantics, supplier) : null;
+    const res = await api.step(state.episodeId, qty, wireRoute, wireSupplier);
     store.applyObs(res.obs, res.cost);
     state.totalCost = store.totalCost;
     state.done = res.done;

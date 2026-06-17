@@ -61,6 +61,8 @@
   <ul id="pipeline-list"><li class="dim">no shipments at sea</li></ul>
   <div class="panel-title gap">LAST WEEK'S COSTS</div>
   <div id="cost-chips"><span class="dim">—</span></div>
+  <div class="panel-title gap">SUPPLIER SCORECARD <span class="tag">OTIF</span></div>
+  <div id="scorecard-rows"></div>
 </aside>
 
 
@@ -105,6 +107,13 @@
     </div>
   </div>
   <div class="deck-group">
+    <div class="deck-label">supplier</div>
+    <div class="seg" id="supplier-seg">
+      <button data-supplier="qualified" class="active qualified" disabled>Qualified<span>OTIF 99 · +$1/u</span></button>
+      <button data-supplier="spot" class="spot" disabled>Spot<span>cheaper · may ship short</span></button>
+    </div>
+  </div>
+  <div class="deck-group">
     <div class="deck-label">intel</div>
     <button id="btn-briefing" class="ghost tall">briefing<span>$30</span></button>
   </div>
@@ -123,8 +132,8 @@
       <summary>how this world works</summary>
       <div class="hiw-flow">
         <div class="hiw-node stochastic">
-          <b>HIDDEN</b><span>disruption chain</span>
-          <em>(regime, age, type) · the only random draw · 1/week · seeded</em>
+          <b>HIDDEN ×2</b><span>disruption + supplier</span>
+          <em>two independent chains · supplier reliability drifts too · seeded</em>
         </div>
         <div class="hiw-arrow">→</div>
         <div class="hiw-node">
@@ -133,8 +142,8 @@
         </div>
         <div class="hiw-arrow">→</div>
         <div class="hiw-node">
-          <b>YOU</b><span>qty × route × briefing</span>
-          <em>actions can't move the hidden chain (exogenous)</em>
+          <b>YOU</b><span>qty × supplier × route × briefing</span>
+          <em>actions can't move either hidden chain (exogenous)</em>
         </div>
         <div class="hiw-arrow">→</div>
         <div class="hiw-node">
