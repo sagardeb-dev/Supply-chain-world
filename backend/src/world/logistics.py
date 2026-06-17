@@ -11,7 +11,7 @@ its congestion point at dispatch+cape_chokepoint_offset."""
 from dataclasses import dataclass
 
 from .config import WorldConfig
-from .state import HiddenState
+from .state import HiddenState, SupplierState
 
 
 @dataclass
@@ -19,6 +19,7 @@ class Shipment:
     qty: int
     route: str
     dispatched_week: int
+    supplier: str = "qualified"       # which supplier dispatched it (attribution)
     status: str = "at_sea"            # at_sea | queued_at_suez | diverted_via_cape
     arrives_week: int | None = None   # fixed once the chokepoint resolves
 
@@ -32,6 +33,7 @@ class Shipment:
 
     def to_dict(self, cfg: WorldConfig) -> dict:
         return {"qty": self.qty, "route": self.route,
+                "supplier": self.supplier,
                 "dispatched_week": self.dispatched_week,
                 "status": self.status, "eta": self.eta(cfg)}
 
@@ -77,15 +79,27 @@ def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> float:
     return 0.0
 
 
-def resolve_week(books: Books, qty: int, route: str | None, h: HiddenState,
+def resolve_week(books: Books, qty: int, supplier: str | None,
+                 route: str | None, h: HiddenState, sup: SupplierState,
                  week: int, cfg: WorldConfig):
     """Dispatch this week's order (if any), move every in-flight ship one
-    week, land arrivals, consume demand. Returns (arrived_qty, cost_breakdown)."""
+    week, land arrivals, consume demand. Returns (arrived_qty, cost_breakdown).
+
+    The supplier stage (factor 2) resolves at DISPATCH: a spot order ships
+    round(qty * fulfilled_fraction) -- a degraded spot order may leave the
+    dock SHORT (or not at all). Qualified always ships full. Once at sea the
+    voyage stage is untouched: stage 1 (sourcing) output feeds stage 2.
+
+    ponytail: unit economics (spot discount / qualified premium) and the
+    disruption cost coupling land in T5; this task only wires the shortfall."""
     shipping = 0.0
     if qty:
-        unit = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
-        books.pipeline.append(Shipment(qty, route, week))
-        shipping = qty * unit
+        frac = sup.fulfilled_fraction if supplier == "spot" else 1.0
+        shipped = round(qty * frac)
+        if shipped:
+            unit = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
+            books.pipeline.append(Shipment(shipped, route, week, supplier))
+            shipping = shipped * unit
 
     surcharge = 0.0
     for s in books.pipeline:

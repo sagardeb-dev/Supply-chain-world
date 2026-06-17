@@ -9,6 +9,7 @@ import random
 from .config import WorldConfig
 from .emission import analyst_briefing, news_bulletin, observe_counts
 from .logistics import Books, resolve_week
+from .state import SupplierState
 from .semantics import COUNT_KEYS, ROUTE_DISPLAY, STATUS_DISPLAY
 from .state import HiddenState
 from .transition import step_hidden
@@ -64,8 +65,10 @@ class World:
 
         self.week += 1
         self.hidden = step_hidden(self.hidden, self.rng, self.cfg)
-        arrived, costs = resolve_week(self.books, qty, route if qty else None,
-                                      self.hidden, self.week, self.cfg)
+        # ponytail: supplier hard-wired to qualified until T6 adds self.supplier.
+        arrived, costs = resolve_week(self.books, qty, "qualified" if qty else None,
+                                      route if qty else None, self.hidden,
+                                      SupplierState(), self.week, self.cfg)
         if briefed:
             costs["briefing"] = self.cfg.briefing_cost
 

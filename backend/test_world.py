@@ -56,16 +56,19 @@ def sup_frac(**kw):
     return SupplierState(**kw).fulfilled_fraction
 
 
-def sail(weekly_hidden, orders=None):
+def sail(weekly_hidden, orders=None, supplier="qualified", sup=None):
     """Drive Books through resolve_week with a scripted hidden sequence.
-    orders = [(qty, route)] per week, default (20, "suez").
+    orders = [(qty, route)] per week, default (20, "suez"). supplier defaults
+    to qualified (always ships full) so existing voyage tests are unaffected.
     Returns (books, first_week1_shipment_or_None, weekly_costs)."""
+    if sup is None:
+        sup = SupplierState()  # reliable: full fulfilment
     books = Books(inventory=CFG.initial_inventory)
     first = None
     costs = []
     for week, h in enumerate(weekly_hidden, start=1):
         qty, route = orders[week - 1] if orders else (20, "suez")
-        _, c = resolve_week(books, qty, route, h, week, CFG)
+        _, c = resolve_week(books, qty, supplier, route, h, sup, week, CFG)
         if first is None:
             first = next((s for s in books.pipeline if s.dispatched_week == 1), None)
         costs.append(c)
@@ -458,7 +461,9 @@ def test_resolve_rel_mirrors_resolve_week():
             h = step_hidden(h, rng, CFG)
             qty = rng.choice(CFG.order_quantities)
             route = rng.choice(("suez", "cape")) if qty else None
-            arrived, costs = resolve_week(books, qty, route, h, week, CFG)
+            arrived, costs = resolve_week(books, qty,
+                                          "qualified" if qty else None,
+                                          route, h, SupplierState(), week, CFG)
             core = (h.event_state, h.event_age, h.disruption_type)
             pipe, inv, arrived2, cost2 = resolve_rel(
                 pipe, inv, qty, route, core, h.cape_local_congestion, CFG)
@@ -828,3 +833,43 @@ def test_scorecard_slipping_ambiguity():
     deg1 = _spot(scorecard(rel_state="degraded", rel_age=1))
     assert wob == deg0, "wobbling and degraded-onset must be indistinguishable"
     assert wob != deg1, "they must separate one week later"
+
+
+
+def test_qualified_ships_full_regardless_of_spot_state():
+    """Supplier Q has no hidden state: a degraded spot regime does not affect
+    a qualified order -- it ships the full qty (no regression in voyage)."""
+    _, s, _ = sail([CALM] * 5, orders=[(40, "suez")] * 5,
+                   supplier="qualified",
+                   sup=SupplierState(rel_state="degraded", rel_age=1))
+    assert s.qty == 40 and s.supplier == "qualified"
+
+
+def test_spot_ships_full_when_reliable():
+    _, s, _ = sail([CALM] * 5, orders=[(40, "suez")] * 5,
+                   supplier="spot", sup=SupplierState())  # reliable
+    assert s.qty == 40 and s.supplier == "spot"
+
+
+def test_spot_ships_half_when_wobbling():
+    """fulfilled_fraction 0.5 -> a 40-unit spot order ships 20."""
+    _, s, _ = sail([CALM] * 5, orders=[(40, "suez")] * 5,
+                   supplier="spot", sup=SupplierState(rel_state="wobbling"))
+    assert s.qty == 20 and s.supplier == "spot"
+
+
+def test_spot_ships_zero_when_degraded():
+    """fulfilled_fraction 0.0 -> no shipment created at all (qty 0 dispatch)."""
+    books, s, _ = sail([CALM] * 5, orders=[(40, "suez")] * 5,
+                       supplier="spot",
+                       sup=SupplierState(rel_state="degraded", rel_age=1))
+    # nothing dispatched in week 1: no week-1 shipment in the pipeline
+    assert s is None
+    assert all(sh.qty > 0 for sh in books.pipeline)
+
+
+def test_voyage_dynamics_unchanged_on_shipped_qty():
+    """The voyage stage is untouched: a qualified suez order still arrives
+    on the clean-passage schedule (regression pin)."""
+    _, s, _ = sail([CALM] * 5, supplier="qualified")
+    assert (s.arrives_week, s.status) == (4, "at_sea")
