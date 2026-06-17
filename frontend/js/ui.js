@@ -101,6 +101,10 @@ export class UI {
     $('briefing-card').classList.add('hidden');
   }
 
+  // The obs→view boundary. EXTENSION POINT (hidden-factor scaling): a 2nd
+  // latent module adds fields to obs; render them as additional rows here
+  // (books / counts), not a bespoke panel per factor. The scene geometry is
+  // world-specific and extended separately when a new factor lands.
   update(obs, totalCost, horizon) {
     $('week-label').textContent = `Week ${obs.week} / ${horizon}`;
     $('week-fill').style.width = `${(obs.week / horizon) * 100}%`;
