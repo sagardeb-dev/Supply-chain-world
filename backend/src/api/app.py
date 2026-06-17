@@ -76,10 +76,16 @@ class ResetResponse(BaseModel):
     obs: dict
 
 
+class ContractAction(BaseModel):
+    action: str            # sign|switch|renew|lapse
+    supplier: str          # canonical or anon supplier id
+
+
 class ActionRequest(BaseModel):
     qty: Literal[0, 20, 40]
     route: str | None = None  # vocabulary depends on episode semantics
-    supplier: str | None = None  # qualified|spot (or anon source_a|source_b)
+    supplier: str | None = None  # qualified|spot|backup (or anon source_*)
+    contract: ContractAction | None = None  # sign/renew/switch/lapse a contract
 
 
 class StepResponse(BaseModel):
@@ -136,7 +142,14 @@ def step_episode(episode_id: str, action: ActionRequest) -> StepResponse:
         if supplier is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 f"unknown supplier {action.supplier!r} for this episode")
-    r = svc_step(world, action.qty, route, supplier)
+    contract = None
+    if action.contract is not None:
+        csup = SUPPLIER_PARSE[world.cfg.semantics].get(action.contract.supplier)
+        if csup is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"unknown contract supplier {action.contract.supplier!r}")
+        contract = {"action": action.contract.action, "supplier": csup}
+    r = svc_step(world, action.qty, route, supplier, contract)
     return StepResponse(obs=r["obs"], cost=r["cost"], done=r["done"])
 
 

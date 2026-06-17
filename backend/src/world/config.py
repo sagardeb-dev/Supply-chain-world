@@ -83,6 +83,10 @@ class WorldConfig:
     backup_lead_days: int = 16
     backup_unit_delta: float = 0.3        # a small premium (dearer than spot, < Q)
     backup_onboard_weeks: int = 1         # cannot ship its FIRST order for 1 wk (R-later)
+    # --- contracts (R4): a timer + terms. Default length; menu of lengths R5 ---
+    contract_weeks: int = 8               # ~3 renewal events per 26-wk horizon
+    contract_otif_floor: int = 85         # penalty clause threshold (R5)
+    contract_break_fee: float = 10.0      # early-exit cost (irreversibility teeth)
     # The cost COUPLING knob (Becker JV term): a spot shortfall during a
     # disruption-active week is back-ordered at the crisis spot rate. Set to
     # 3x the stockout cost so gambling on spot when the Red Sea is twitchy is

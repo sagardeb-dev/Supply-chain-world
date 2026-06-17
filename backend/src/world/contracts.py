@@ -17,7 +17,8 @@ from dataclasses import dataclass
 class Contract:
     supplier: str          # which roster supplier this binds
     start_week: int
-    end_week: int          # the contract is OPEN once week >= end_week
+    end_week: int | None   # the contract is OPEN once week >= end_week;
+                           # None = evergreen (the incumbent anchor, never lapses)
     unit_price: float      # locked price for the duration (price-lock teeth)
     otif_floor: int        # OTIF below which a penalty clause triggers (R5)
     break_fee: float       # cost to exit before end_week (early-exit teeth)
@@ -28,6 +29,10 @@ def contract_open(contract: Contract, week: int, alive: dict) -> bool:
     when it has EXPIRED or its counterparty has DIED. A pure function of
     conditions -- the emergence hinges on this never naming a tick or scenario.
 
-        open := week >= end_week  OR  not alive[supplier]
+        open := (end_week is not None AND week >= end_week)
+                 OR  not alive[supplier]
+
+    An evergreen contract (end_week=None) only opens if its counterparty dies.
     """
-    return week >= contract.end_week or not alive[contract.supplier]
+    expired = contract.end_week is not None and week >= contract.end_week
+    return expired or not alive[contract.supplier]

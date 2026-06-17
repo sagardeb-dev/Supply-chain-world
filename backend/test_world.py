@@ -999,14 +999,25 @@ def test_couple_no_surcharge_for_qualified_or_full_spot():
 # --- T6: engine wires the supplier factor ---------------------------------
 
 def _spot_episode(seed, qty=20, route="suez"):
-    """Drive an episode sourcing spot every week."""
+    """Drive an episode sourcing spot every week. Signs a spot contract up
+    front and renews it whenever it opens (expiry or defunct), so the spot
+    source stays live across the horizon."""
     world = World()
-    world.reset(seed)
+    obs = world.reset(seed)
+    world.step({"qty": 0, "contract": {"action": "sign", "supplier": "spot"}})
     while not world.done:
-        if qty:
-            world.step({"qty": qty, "supplier": "spot", "route": route})
-        else:
-            world.step({"qty": 0})
+        action = {"qty": qty} if not qty else {"qty": qty, "supplier": "spot",
+                                              "route": route}
+        if "spot" in obs.get("contract_open", []):
+            action = {**action, "contract":
+                      {"action": "renew", "supplier": "spot"}}
+            if qty:  # if spot just died, can't source it this week
+                alive = obs and any(s["id"] == "spot" and s.get("band") != "defunct"
+                                    for s in obs["suppliers"])
+                if not alive:
+                    action = {"qty": 0, "contract":
+                              {"action": "renew", "supplier": "spot"}}
+        obs, *_ = world.step(action)
     return world
 
 
@@ -1016,6 +1027,7 @@ def test_step_accepts_supplier_and_emits_scorecard():
     assert "suppliers" in obs0  # scorecard present from week 0
     ids = {s["id"] for s in obs0["suppliers"]}
     assert ids == {"qualified", "spot", "backup"}
+    world.step({"qty": 0, "contract": {"action": "sign", "supplier": "spot"}})
     obs, _, _, _ = world.step({"qty": 20, "supplier": "spot", "route": "suez"})
     assert "suppliers" in obs
 
@@ -1084,3 +1096,68 @@ def test_contract_open_when_counterparty_defunct():
     alive_dead = {"spot": False, "qualified": True, "backup": True}
     assert not contract_open(c, week=3, alive=alive_ok)   # mid-lock, supplier alive
     assert contract_open(c, week=3, alive=alive_dead)     # supplier died -> open!
+
+
+# --- R4: standing rule + action mask in the engine (Lever 2 emergence) ------
+
+def test_episode_starts_pre_contracted_to_qualified():
+    """Week 0: the agent already holds a live qualified contract (you don't
+    start a supply chain with no supplier). obs exposes it; nothing is open."""
+    w = World()
+    obs0 = w.reset(3)
+    assert len(w.books.contracts) == 1
+    c = w.books.contracts[0]
+    assert c.supplier == "qualified" and c.start_week == 0
+    assert obs0["contracts"] and obs0["contracts"][0]["supplier"] == "qualified"
+    assert obs0["contract_open"] == []  # nothing to renew at the start
+
+
+def test_cannot_source_supplier_without_a_live_contract():
+    """Per-contract granularity: ordering from a supplier you are NOT
+    contracted with raises (no fallback). Spot has no contract at start."""
+    w = World()
+    w.reset(3)
+    with pytest.raises(ValueError):
+        w.step({"qty": 20, "supplier": "spot", "route": "suez"})
+    # but qualified (the live contract) is fine
+    obs, *_ = w.step({"qty": 20, "supplier": "qualified", "route": "suez"})
+    assert obs["week"] == 1
+
+
+def test_sign_contract_action_then_source_it():
+    """A `contract` sub-action signs a spot contract; afterwards spot is a
+    legal sourcing choice."""
+    w = World()
+    w.reset(3)
+    w.step({"qty": 0, "contract": {"action": "sign", "supplier": "spot"}})
+    assert any(c.supplier == "spot" for c in w.books.contracts)
+    # now sourcing spot is allowed
+    obs, *_ = w.step({"qty": 20, "supplier": "spot", "route": "suez"})
+    assert obs["week"] == 2
+
+
+def test_expired_contract_surfaces_as_open():
+    """A time-boxed SPOT contract (end_week=8) opens once week reaches it; the
+    evergreen qualified incumbent never opens. Default length 8 wks (R4)."""
+    w = World()
+    w.reset(3)
+    w.step({"qty": 0, "contract": {"action": "sign", "supplier": "spot"}})
+    last = None
+    for _ in range(9):
+        last, *_ = w.step({"qty": 20, "supplier": "qualified", "route": "suez"})
+    # the spot contract signed at week 0 (end_week=8) is now open; qualified isn't
+    assert "spot" in last["contract_open"]
+    assert "qualified" not in last["contract_open"]
+
+
+def test_defunct_spot_auto_opens_its_contract_no_script():
+    """THE EMERGENCE PROOF (unit level): sign a long spot contract, force spot
+    to defunct, and the contract opens on its OWN -- no scripted week, no
+    per-event code. Lever 1 (defunct) x Lever 2 (standing rule)."""
+    w = World()
+    w.reset(3)
+    w.step({"qty": 0, "contract": {"action": "sign", "supplier": "spot"}})
+    # forcibly kill spot (simulate the primitive having fired)
+    w.suppliers["spot"] = SupplierState(rel_state="defunct")
+    obs, *_ = w.step({"qty": 0})  # a do-nothing week
+    assert "spot" in obs["contract_open"], "dead supplier must auto-open its contract"
