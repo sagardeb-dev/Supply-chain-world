@@ -1,8 +1,9 @@
 // Episode controller: wires the API, the Three.js scene, and the HUD.
-import { api, LABELS, normalizeObs, routeForWire } from './api.js';
+import { api, LABELS, routeForWire } from './api.js';
 import { SceneView } from './scene.js';
 import { UI } from './ui.js';
 import { AgentPanel } from './agent.js';
+import { Store } from './store.js';
 
 const HORIZON = 26; // cfg.horizon_weeks
 
@@ -62,11 +63,8 @@ const ui = new UI({
       state.totalCost = 0;
       state.done = false;
       const labels = LABELS[semantics];
-      scene.setLabels(labels);
       ui.beginEpisode(labels);
-      const obs = normalizeObs(res.obs, semantics);
-      scene.reset(obs);
-      ui.update(obs, 0, HORIZON);
+      store.begin({ semantics, seed, research, labels, firstObs: res.obs });
       if (research) {
         document.getElementById('xray-rail')?.classList.remove('hidden');
         ui.updateRail((await api.xray(state.episodeId)).weeks, HORIZON);
@@ -85,12 +83,10 @@ const ui = new UI({
   onCommit: (qty, route) => guard(async () => {
     const wireRoute = qty ? routeForWire(state.semantics, route) : null;
     const res = await api.step(state.episodeId, qty, wireRoute);
-    state.totalCost += res.cost;
+    store.applyObs(res.obs, res.cost);
+    state.totalCost = store.totalCost;
     state.done = res.done;
     ui.clearBriefing();
-    const obs = normalizeObs(res.obs, state.semantics);
-    scene.applyObs(obs);
-    ui.update(obs, state.totalCost, HORIZON);
     if (state.research) {
       ui.updateRail((await api.xray(state.episodeId)).weeks, HORIZON);
     }
@@ -107,6 +103,11 @@ const ui = new UI({
   }),
 });
 
+// Single visible-episode store: both human commits (above) and agent
+// obs-events (Task 4) drive scene + ui through it. Exported so the agent
+// wiring can import the same instance.
+const store = new Store(scene, ui);
+
 ui.showNewModal();
 
 // agent panel
@@ -118,3 +119,7 @@ window.__agentOnDone = (seed, totalCost) => {
   const endCost = document.getElementById('end-cost');
   if (endCost) endCost.textContent = '$' + Math.round(totalCost);
 };
+
+// Shared singletons for the agent wiring (Task 4): one scene, one ui, one
+// store — the agent drives the same instances the human play path uses.
+export { store, scene, ui };
