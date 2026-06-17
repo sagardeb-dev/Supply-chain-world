@@ -520,3 +520,17 @@ def test_benchmark_endpoint(causal):
         assert client.get("/benchmark/-1").status_code == 422
     finally:
         appmod._bench = saved
+
+
+def test_service_parity():
+    """svc_* over a World yields the same obs/cost as driving it directly."""
+    from src.agent.service import svc_observation, svc_briefing, svc_step
+    a = World(); a.reset(3)
+    b = World(); b.reset(3)
+    # direct vs service, same scripted orders
+    for qty, route in [(20, "suez"), (0, None), (40, "cape")]:
+        oa, ca, da, _ = a.step({"qty": qty, "route": route})
+        rb = svc_step(b, qty, route)
+        assert rb["obs"] == oa and rb["cost"] == ca and rb["done"] == da
+    # svc_observation reads the current obs (matches the trace tail)
+    assert svc_observation(b) == b.trace[-1]["obs"]

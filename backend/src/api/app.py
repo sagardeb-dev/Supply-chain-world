@@ -20,6 +20,7 @@ from src.world import World, WorldConfig
 from src.world.causal_oracle import CausalOracle, causal_play
 from src.world.oracle import oracle_plan
 from src.world.semantics import ROUTE_PARSE
+from src.agent.service import svc_briefing, svc_step
 from report_oracle import fixed_policy_cost, base_stock_cost
 
 app = FastAPI(title="supply-chain-pomdp")
@@ -80,8 +81,8 @@ def buy_briefing(episode_id: str) -> BriefingResponse:
     world = _get(episode_id)
     if world.done:
         raise HTTPException(status.HTTP_409_CONFLICT, "episode is done")
-    return BriefingResponse(briefing=world.request_briefing(),
-                            cost=world.cfg.briefing_cost)
+    r = svc_briefing(world)
+    return BriefingResponse(briefing=r["briefing"], cost=r["cost"])
 
 
 @app.post("/episodes/{episode_id}/step", response_model=StepResponse)
@@ -95,8 +96,8 @@ def step_episode(episode_id: str, action: ActionRequest) -> StepResponse:
         if route is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 f"unknown route {action.route!r} for this episode")
-    obs, cost, done, _info = world.step({"qty": action.qty, "route": route})
-    return StepResponse(obs=obs, cost=cost, done=done)
+    r = svc_step(world, action.qty, route)
+    return StepResponse(obs=r["obs"], cost=r["cost"], done=r["done"])
 
 
 @app.get("/episodes/{episode_id}/trace")
