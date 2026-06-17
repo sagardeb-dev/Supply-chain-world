@@ -2,6 +2,7 @@
 import { api, LABELS, normalizeObs, routeForWire } from './api.js';
 import { SceneView } from './scene.js';
 import { UI } from './ui.js';
+import { AgentPanel } from './agent.js';
 
 const HORIZON = 26; // cfg.horizon_weeks
 
@@ -107,3 +108,13 @@ const ui = new UI({
 });
 
 ui.showNewModal();
+
+// agent panel
+const agentPanel = new AgentPanel();
+window.__agentOnDone = (seed, totalCost) => {
+  pollBenchmark(seed, totalCost);
+  const endModal = document.getElementById('modal-end');
+  if (endModal) endModal.classList.remove('hidden');
+  const endCost = document.getElementById('end-cost');
+  if (endCost) endCost.textContent = '$' + Math.round(totalCost);
+};

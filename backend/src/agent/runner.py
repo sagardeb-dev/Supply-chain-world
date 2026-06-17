@@ -87,12 +87,14 @@ class AgentRun:
         return run
 
 
-async def stream(run: AgentRun, agent, kickoff):
-    """Async generator of SSE lines. `kickoff` is the user message on a fresh
-    run, None to resume an interrupted run from its last checkpoint, or a
-    Command(resume=...) to release a step-gate. Demuxes the combined
-    ["updates","messages"] stream into thought / tool_call / tool_result /
-    interrupt / done / error events. Persists the World after each step."""
+async def stream(run: AgentRun, build_agent_fn, kickoff):
+    """Async generator of SSE lines. `build_agent_fn` is a zero-arg callable
+    that constructs the agent -- called INSIDE the try so a build failure
+    (missing key, bad model slug) surfaces as a visible `error` event rather
+    than an opaque 500. `kickoff` is the user message on a fresh run, None to
+    resume from the last checkpoint, or a Command(resume=...) to release a
+    step-gate. Demuxes ["updates","messages"] into thought / tool_call /
+    tool_result / interrupt / done / error. Persists the World after each step."""
     config = {"configurable": {"thread_id": run.run_id}}
     if kickoff is None:
         agent_input = None
@@ -103,6 +105,7 @@ async def stream(run: AgentRun, agent, kickoff):
 
     run.active = True
     try:
+        agent = build_agent_fn()  # inside try: build errors become `error` events
         async for mode, payload in agent.astream(
                 agent_input, config, stream_mode=["updates", "messages"]):
             if mode == "messages":

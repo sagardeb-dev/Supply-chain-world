@@ -56,6 +56,24 @@
   <div id="cost-chips"><span class="dim">—</span></div>
 </aside>
 
+
+<!-- ======== agent panel ======== -->
+<aside id="agent-panel" class="panel">
+  <div class="panel-title">LLM AGENT <span class="tag">watch it play</span></div>
+  <div class="ag-controls">
+    <label>model <input id="ag-model" type="text" value="openai/gpt-4o-mini"></label>
+    <label>seed <input id="ag-seed" type="number" value="3"></label>
+    <label>mode
+      <select id="ag-mode">
+        <option value="autonomous">autonomous</option>
+        <option value="step_gated">step-gated</option>
+      </select>
+    </label>
+    <button id="ag-run" class="primary">run ▶</button>
+    <button id="ag-advance" class="ghost" disabled>advance ▶</button>
+  </div>
+  <div id="agent-log"><span class="dim">idle — pick a model and press run.</span></div>
+</aside>
 <!-- ======== briefing card ======== -->
 <div id="briefing-card" class="panel hidden">
   <div class="panel-title">ANALYST BRIEFING <span class="tag">$30 · charged at commit</span></div>

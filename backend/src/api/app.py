@@ -233,13 +233,13 @@ def stream_agent_run(run_id: str) -> StreamingResponse:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown run")
     if run.active:
         raise HTTPException(status.HTTP_409_CONFLICT, "run already streaming")
-    agent = _build_agent_for(run)
     # First connect kicks off the episode; a reconnect after a drop resumes
-    # from the last checkpoint (kickoff=None). The agent's message history
-    # decides which: an empty thread starts, a partial thread continues.
+    # from the last checkpoint (kickoff=None). The agent is built INSIDE the
+    # stream so a build failure (missing key) becomes an error event, not a 500.
     kickoff = KICKOFF if not run.recorder else None
-    return StreamingResponse(agent_stream(run, agent, kickoff),
-                             media_type="text/event-stream")
+    return StreamingResponse(
+        agent_stream(run, lambda: _build_agent_for(run), kickoff),
+        media_type="text/event-stream")
 
 
 @app.post("/agent/runs/{run_id}/advance")
@@ -250,10 +250,10 @@ def advance_agent_run(run_id: str) -> StreamingResponse:
     if run.mode != "step_gated":
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "advance only applies to step_gated runs")
-    agent = _build_agent_for(run)
     cmd = Command(resume={"decisions": [{"type": "approve"}]})
-    return StreamingResponse(agent_stream(run, agent, cmd),
-                             media_type="text/event-stream")
+    return StreamingResponse(
+        agent_stream(run, lambda: _build_agent_for(run), cmd),
+        media_type="text/event-stream")
 
 
 @app.get("/agent/runs/{run_id}/log")

@@ -285,3 +285,19 @@ button.primary.big { width: 100%; margin-top: 18px; font-size: 15px; }
 }
 #ghost-strip .wk .marks { position: absolute; top: 2px; font-size: 8px; color: var(--accent); }
 #ghost-caption { font-size: 11px; margin-bottom: 8px; }
+
+/* ---------- agent panel ---------- */
+#agent-panel { position: fixed; right: 16px; bottom: 110px; width: 380px; max-height: 60vh; display: flex; flex-direction: column; z-index: 60; }
+.ag-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-bottom: 8px; }
+.ag-controls label { display: flex; flex-direction: column; font-size: 11px; color: var(--dim); gap: 2px; }
+.ag-controls input, .ag-controls select { background: #0a1626; border: 1px solid var(--panel-border); color: var(--text); border-radius: 6px; padding: 4px 6px; font: inherit; }
+.ag-controls #ag-model { width: 150px; }
+.ag-controls #ag-seed { width: 64px; }
+#agent-log { overflow-y: auto; font-size: 12px; line-height: 1.5; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
+.ag-thought { color: var(--text); white-space: pre-wrap; }
+.ag-tool { color: var(--accent); }
+.ag-tool b { color: var(--accent); }
+.ag-result { color: var(--dim); white-space: pre-wrap; border-left: 2px solid var(--panel-border); padding-left: 6px; }
+.ag-interrupt { color: var(--cape); }
+.ag-done { color: var(--good); font-weight: 600; }
+.ag-error { color: var(--danger); font-weight: 600; }
