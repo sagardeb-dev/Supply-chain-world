@@ -63,6 +63,9 @@
   <div id="cost-chips"><span class="dim">—</span></div>
   <div class="panel-title gap">SUPPLIER SCORECARD <span class="tag">OTIF</span></div>
   <div id="scorecard-rows"></div>
+  <div class="panel-title gap">CONTRACTS <span class="tag">timer + terms</span></div>
+  <div id="contract-prompt" class="contract-prompt hidden"></div>
+  <div id="contract-rows"></div>
 </aside>
 
 
@@ -109,8 +112,9 @@
   <div class="deck-group">
     <div class="deck-label">supplier</div>
     <div class="seg" id="supplier-seg">
-      <button data-supplier="qualified" class="active qualified" disabled>Qualified<span>OTIF 99 · +$1/u</span></button>
+      <button data-supplier="qualified" class="active qualified" disabled>Incumbent<span>OTIF 99 · +$1/u</span></button>
       <button data-supplier="spot" class="spot" disabled>Spot<span>cheaper · may ship short</span></button>
+      <button data-supplier="backup" class="backup" disabled>Backup<span>OTIF 95 · +$0.3/u · 1wk</span></button>
     </div>
   </div>
   <div class="deck-group">

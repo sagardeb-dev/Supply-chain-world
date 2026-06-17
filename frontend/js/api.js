@@ -35,8 +35,8 @@ const ROUTE_SEND = {
 };
 
 const SUPPLIER_SEND = {
-  real: { qualified: 'qualified', spot: 'spot' },
-  anon: { qualified: 'source_a', spot: 'source_b' },
+  real: { qualified: 'qualified', spot: 'spot', backup: 'backup' },
+  anon: { qualified: 'source_a', spot: 'source_b', backup: 'source_c' },
 };
 
 export const LABELS = {
@@ -44,13 +44,13 @@ export const LABELS = {
     suez: 'Suez Canal', bab: 'Bab el-Mandeb', cape: 'Cape of Good Hope',
     routeSuez: 'Suez', routeCape: 'Cape',
     origin: 'Shanghai', dest: 'Rotterdam',
-    supQualified: 'Qualified', supSpot: 'Spot',
+    supQualified: 'Incumbent', supSpot: 'Spot', supBackup: 'Backup',
   },
   anon: {
     suez: 'Waterway One', bab: 'The Strait', cape: 'Waterway Two',
     routeSuez: 'Waterway 1', routeCape: 'Waterway 2',
     origin: 'Origin Port', dest: 'Destination',
-    supQualified: 'Source A', supSpot: 'Source B',
+    supQualified: 'Source A', supSpot: 'Source B', supBackup: 'Source C',
   },
 };
 
@@ -87,17 +87,33 @@ export function normalizeObs(obs, semantics) {
     // emission fact — see spec A5).
     suppliers: (obs.suppliers ?? []).map((s) => ({
       id: canonicalSupplier(s.id),
-      otif: s.otif,
+      otif: s.otif,                       // null => defunct (shows '-')
       leadDays: s.lead_days,
-      unitDelta: s.unit_discount != null ? -s.unit_discount : s.unit_premium,
+      band: s.band,                       // ontime|slipping|failing|defunct
+      onboardLead: s.onboard_lead ?? 0,
+      unitDelta: s.unit_delta != null ? s.unit_delta
+        : (s.unit_discount != null ? -s.unit_discount : s.unit_premium),
     })),
     sourcing: sourcingFromPipeline(obs.pipeline, obs.week),
+    // contracts (a timer + terms the agent set) and the auto-renewal prompt
+    contracts: (obs.contracts ?? []).map((c) => ({
+      supplier: canonicalSupplier(c.supplier),
+      startWeek: c.start_week,
+      endWeek: c.end_week,               // null => evergreen incumbent
+      unitPrice: c.unit_price,
+      otifFloor: c.otif_floor,
+      breakFee: c.break_fee,
+    })),
+    contractOpen: (obs.contract_open ?? []).map(canonicalSupplier),
+    termMenu: obs.term_menu ?? [],
   };
 }
 
-// anon source_a/source_b (or already-canonical) -> qualified/spot
+// anon source_* (or already-canonical) -> canonical roster id
 function canonicalSupplier(id) {
-  return (id === 'source_b' || id === 'spot') ? 'spot' : 'qualified';
+  if (id === 'source_b' || id === 'spot') return 'spot';
+  if (id === 'source_c' || id === 'backup') return 'backup';
+  return 'qualified';
 }
 
 // The newest shipment dispatched THIS week tells us which supplier was

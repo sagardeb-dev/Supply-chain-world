@@ -25,7 +25,8 @@ export class UI {
     this.route = 'suez';
     this.supplier = 'qualified';
     this.routeLabels = { suez: 'Suez', cape: 'Cape' };
-    this.supplierLabels = { qualified: 'Qualified', spot: 'Spot' };
+    this.supplierLabels = { qualified: 'Incumbent', spot: 'Spot', backup: 'Backup' };
+    this.contractOpen = [];  // suppliers whose contract needs renewal
 
     $('qty-seg').addEventListener('click', (e) => {
       const btn = e.target.closest('button');
@@ -73,13 +74,15 @@ export class UI {
   beginEpisode(labels) {
     $('xray-rail').classList.add('hidden');
     this.routeLabels = { suez: labels.routeSuez, cape: labels.routeCape };
-    this.supplierLabels = { qualified: labels.supQualified, spot: labels.supSpot };
+    this.supplierLabels = { qualified: labels.supQualified, spot: labels.supSpot,
+                            backup: labels.supBackup };
     const [sBtn, cBtn] = $('route-seg').querySelectorAll('button');
     sBtn.firstChild.textContent = labels.routeSuez;
     cBtn.firstChild.textContent = labels.routeCape;
-    const [qBtn, pBtn] = $('supplier-seg').querySelectorAll('button');
+    const [qBtn, pBtn, bBtn] = $('supplier-seg').querySelectorAll('button');
     qBtn.firstChild.textContent = labels.supQualified;
     pBtn.firstChild.textContent = labels.supSpot;
+    if (bBtn) bBtn.firstChild.textContent = labels.supBackup;
     $('modal-new').classList.add('hidden');
     for (const id of ['week-pill', 'total-cost', 'news', 'books', 'deck']) {
       $(id).classList.remove('hidden');
@@ -177,18 +180,62 @@ export class UI {
     if (!rows) return;
     rows.innerHTML = '';
     const sourced = obs.sourcing?.supplier ?? null;
+    const contracted = new Set((obs.contracts ?? []).map((c) => c.supplier));
     for (const s of obs.suppliers ?? []) {
-      const band = s.otif >= 95 ? '' : s.otif >= 80 ? 'level-warn' : 'level-alert';
+      // band-driven severity: defunct = dead (the collapse is visible).
+      const accent = s.band === 'defunct' ? 'level-dead'
+        : s.band === 'failing' ? 'level-alert'
+        : s.band === 'slipping' ? 'level-warn' : '';
       const li = document.createElement('div');
-      li.className = `sc-row ${band} ${s.id === sourced ? 'sourced' : ''}`;
+      li.className = `sc-row ${accent} ${s.id === sourced ? 'sourced' : ''}`;
       const name = this.supplierLabels[s.id] ?? s.id;
+      const otif = s.otif == null ? '—' : `${s.otif}%`;
       const delta = s.unitDelta >= 0 ? `+$${s.unitDelta}` : `−$${Math.abs(s.unitDelta)}`;
-      const mark = s.id === sourced ? '<span class="sc-mark">← sourced</span>' : '';
-      li.innerHTML = `<span class="sc-name">${name}</span>
-        <span class="sc-otif">OTIF ${s.otif}%</span>
-        <span class="sc-lead">lead ${s.leadDays}d</span>
+      const marks = [];
+      if (contracted.has(s.id)) marks.push('◆ contracted');
+      if (s.id === sourced) marks.push('← sourced');
+      if (s.onboardLead) marks.push(`${s.onboardLead}wk onboard`);
+      const mark = marks.length
+        ? `<span class="sc-mark">${marks.join('  ·  ')}</span>` : '';
+      const dead = s.band === 'defunct' ? ' <span class="sc-dead">DEFUNCT</span>' : '';
+      li.innerHTML = `<span class="sc-name">${name}${dead}</span>
+        <span class="sc-otif">OTIF ${otif}</span>
+        <span class="sc-lead">lead ${s.leadDays ?? '—'}d</span>
         <span class="sc-unit">${delta}/u</span>${mark}`;
       rows.appendChild(li);
+    }
+    this._renderContracts(obs);
+  }
+
+  // The contract HUD: active contracts (supplier, ends-week, terms) + the
+  // auto-renewal PROMPT. When obs.contractOpen is non-empty, a banner appears
+  // -- this is the emergence surfacing in the UI, fired by the world's own
+  // standing rule (expiry or a defunct supplier), not by any scripted week.
+  _renderContracts(obs) {
+    const host = $('contract-rows');
+    if (!host) return;
+    host.innerHTML = '';
+    for (const c of obs.contracts ?? []) {
+      const name = this.supplierLabels[c.supplier] ?? c.supplier;
+      const ends = c.endWeek == null ? 'evergreen' : `ends wk ${c.endWeek}`;
+      const open = (obs.contractOpen ?? []).includes(c.supplier);
+      const chip = document.createElement('div');
+      chip.className = `contract-chip ${open ? 'open' : ''}`;
+      chip.innerHTML = `<span class="ct-sup">${name}</span>
+        <span class="ct-ends">${ends}</span>
+        <span class="ct-price">$${c.unitPrice.toFixed(1)}/u</span>`;
+      host.appendChild(chip);
+    }
+    const banner = $('contract-prompt');
+    if (banner) {
+      const open = obs.contractOpen ?? [];
+      if (open.length) {
+        const names = open.map((id) => this.supplierLabels[id] ?? id).join(', ');
+        banner.textContent = `⚠ contract open: ${names} — renew, switch, or let lapse`;
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
     }
   }
 
