@@ -637,3 +637,73 @@ def test_agent_sse_mock(monkeypatch):
         < body.index("event: tool_result") < body.index("event: done")
     # the tool_call carried the structured args
     assert '"name": "place_order"' in body and '"qty": 20' in body
+
+
+def _parse_sse(frames):
+    """Parse a list of raw SSE strings into [(event, data_dict), ...]."""
+    import json as _json
+    out = []
+    for f in frames:
+        if not f.strip():
+            continue
+        ev = data = None
+        for line in f.splitlines():
+            if line.startswith("event: "):
+                ev = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = _json.loads(line[len("data: "):])
+        out.append((ev, data))
+    return out
+
+
+def test_place_order_event_carries_obs(tmp_path, monkeypatch):
+    """The place_order tool_result SSE frame carries the post-step structured
+    obs (obs/cost/done/week) read from the recorder tail, while a
+    non-place_order tool_result (get_week) carries no obs. No LLM."""
+    import asyncio
+    import src.agent.runner as runnermod
+    monkeypatch.setattr(runnermod, "RUNS_DIR", tmp_path)
+    from src.agent.runner import AgentRun, stream
+    from src.agent.tools import make_tools
+    from langchain_core.messages import ToolMessage
+
+    # a real run + a genuine place_order event in the recorder
+    run = AgentRun("po-run", seed=3, model_slug="x", mode="autonomous",
+                   semantics="real")
+    get_week, buy_briefing, place_order = make_tools(run)
+    place_order.invoke({"qty": 20, "route": "suez"})
+    assert run.recorder and run.recorder[-1]["kind"] == "place_order"
+
+    # a scripted agent that emits a get_week tool_result then a place_order
+    # tool_result, AFTER the recorder already holds the place_order event
+    class FakeAgent:
+        async def astream(self, agent_input, config, stream_mode=None):
+            yield ("updates", {"tools": {"messages": [
+                ToolMessage(content="situation report", name="get_week",
+                            tool_call_id="g1")]}})
+            yield ("updates", {"tools": {"messages": [
+                ToolMessage(content="Order placed", name="place_order",
+                            tool_call_id="p1")]}})
+
+    async def _drive():
+        return [chunk async for chunk in stream(run, lambda: FakeAgent(), None)]
+
+    frames = _parse_sse(asyncio.run(_drive()))
+    results = [(ev, data) for ev, data in frames if ev == "tool_result"]
+
+    by_name = {data["name"]: data for _, data in results}
+    assert "place_order" in by_name and "get_week" in by_name
+
+    po = by_name["place_order"]
+    for key in ("obs", "cost", "done", "week"):
+        assert key in po, f"place_order tool_result missing {key}: {po}"
+    # the attached obs/cost/done/week are exactly the recorder tail's
+    tail = run.recorder[-1]
+    assert po["obs"] == tail["payload"]["obs"]
+    assert po["cost"] == tail["payload"]["cost"]
+    assert po["done"] == tail["payload"]["done"]
+    assert po["week"] == tail["week"]
+
+    # a non-place_order tool_result carries no world update
+    gw = by_name["get_week"]
+    assert "obs" not in gw and "cost" not in gw

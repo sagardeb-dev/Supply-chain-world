@@ -126,12 +126,20 @@ async def stream(run: AgentRun, build_agent_fn, kickoff):
                                            {"id": tc.get("id"), "name": tc["name"],
                                             "args": tc["args"]})
                         elif isinstance(m, ToolMessage):
-                            # a completed step is the World-snapshot boundary
+                            payload = {"name": getattr(m, "name", None),
+                                       "content": str(m.content)}
                             if m.name == "place_order":
                                 run.save()
-                            yield _sse("tool_result",
-                                       {"name": getattr(m, "name", None),
-                                        "content": str(m.content)})
+                                # the place_order tool just appended
+                                # {qty,route,cost,done,obs} to recorder
+                                last = run.recorder[-1] if run.recorder else None
+                                if last and last.get("kind") == "place_order":
+                                    p = last["payload"]
+                                    payload.update({"obs": p["obs"],
+                                                    "cost": p["cost"],
+                                                    "done": p["done"],
+                                                    "week": last.get("week")})
+                            yield _sse("tool_result", payload)
         run.save()
         yield _sse("done", {"run_id": run.run_id,
                             "total_cost": run.world.total_cost,

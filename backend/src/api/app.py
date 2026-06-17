@@ -223,7 +223,7 @@ def create_agent_run(req: AgentRunRequest) -> dict:
     run = AgentRun(run_id, req.seed, req.model, req.mode, req.semantics)
     agent_runs[run_id] = run
     return {"run_id": run_id, "seed": req.seed, "model": req.model,
-            "mode": req.mode}
+            "mode": req.mode, "semantics": req.semantics}
 
 
 @app.get("/agent/runs/{run_id}/stream")
