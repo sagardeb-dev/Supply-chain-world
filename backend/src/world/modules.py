@@ -22,7 +22,7 @@ from typing import Callable
 
 from .config import SUPPLIERS, WorldConfig
 from .emission import news_bulletin, observe_counts, observe_scorecard
-from .semantics import COUNT_KEYS, SUPPLIER_DISPLAY
+from .semantics import COUNT_KEYS
 from .state import HiddenState, SupplierState
 from .transition import step_hidden, step_supplier
 
@@ -78,8 +78,10 @@ def _supplier_emit(suppliers: dict, cfg: WorldConfig) -> dict:
 
 
 def _supplier_view(cfg: WorldConfig) -> dict:
-    disp = SUPPLIER_DISPLAY[cfg.semantics]
-    return {"suppliers": {"role": "roster-row", "label": disp["spot"]}}
+    # the "suppliers" key is the whole roster (rows carry their own ids), so
+    # its label is a fixed UI word, not an instance name -- inherently leak-
+    # free in both semantics modes. Per-row labels come from the row data.
+    return {"suppliers": {"role": "roster-row", "label": "scorecard"}}
 
 
 SUPPLIER = Module(

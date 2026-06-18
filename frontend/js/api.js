@@ -107,6 +107,10 @@ export function normalizeObs(obs, semantics) {
     })),
     contractOpen: (obs.contract_open ?? []).map(canonicalSupplier),
     termMenu: obs.term_menu ?? [],
+    // presentation manifest {obs_key: {role, label}} from the backend, so
+    // ui.js can render passive keys by declared role (Task 5). Labels already
+    // come through the per-semantics maps, so this is display-only.
+    view: obs._view ?? {},
   };
 }
 

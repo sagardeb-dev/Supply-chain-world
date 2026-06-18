@@ -205,9 +205,18 @@ class World:
             "contract_open": self._open_supplier_ids(),  # the auto-renewal prompt
             "term_menu": list(TERM_MENU),  # the negotiation options (R5)
         }
+        view = {}
         for m in REGISTRY:
             obs.update(m.emit(self._module_state(m), self.cfg))
-        assert not (HIDDEN_KEYS & obs.keys()), "hidden state leaked into observation"
+            view.update(m.view(self.cfg))
+        # presentation manifest: each obs key's display role + label, so the
+        # frontend renders generically (a new passive module needs zero new
+        # JS). NOT a value channel -- the oracle's raw obs readers ignore it,
+        # and the leak guard skips it (labels come through the per-semantics
+        # maps, so anon never leaks a real name here either).
+        leakable = obs.keys() - {"_view"}
+        assert not (HIDDEN_KEYS & leakable), "hidden state leaked into observation"
+        obs["_view"] = view
         return obs
 
     def _module_state(self, m):

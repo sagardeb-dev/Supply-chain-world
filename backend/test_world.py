@@ -1347,3 +1347,46 @@ def test_full_obs_unchanged_emit_driven():
     assert {"week", "inventory", "arrived", "pipeline", "cost_breakdown",
             "contracts", "contract_open", "term_menu"} <= obs0.keys()
     assert not (HIDDEN_KEYS & obs0.keys())
+
+
+# --- _view presentation manifest (display-only; never a value channel) -----
+
+def test_view_manifest_present_with_roles():
+    """Every obs carries a _view map keyed by obs-key, each {role,label}. The
+    count keys are scalars, the bulletin a series, the scorecard a roster-row.
+    Raw value keys are unchanged -- _view is additive."""
+    w = World()
+    obs = w.reset(3)
+    view = obs["_view"]
+    assert view["suez_count"]["role"] == "scalar"
+    assert view["bab_count"]["role"] == "scalar"
+    assert view["cape_count"]["role"] == "scalar"
+    assert view["bulletin"]["role"] == "series"
+    assert view["suppliers"]["role"] == "roster-row"
+    # additive: the raw value keys still exist untouched
+    assert {"suez_count", "bab_count", "cape_count", "bulletin",
+            "suppliers"} <= obs.keys()
+
+
+def test_view_is_skipped_by_leak_guard_and_holds_no_hidden_key():
+    """_view is exempt from the hidden-leak assert (it's presentation), but it
+    must itself never name a hidden-state field."""
+    for rec in run_episode(3).trace:
+        v = rec["obs"]["_view"]
+        assert not (HIDDEN_KEYS & v.keys())
+        # the leak guard still holds over the value keys
+        assert not (HIDDEN_KEYS & (rec["obs"].keys() - {"_view"}))
+
+
+def test_view_labels_never_leak_real_names_in_anon():
+    """Issue 4 anti-leak: _view labels come through the per-semantics maps (or
+    are fixed UI words), so an anon episode's manifest exposes no real
+    waterway/supplier referent -- a side channel the HIDDEN_KEYS guard would
+    NOT catch."""
+    w = World(WorldConfig(semantics="anon"))
+    obs = w.reset(3)
+    labels = " ".join(str(d.get("label", "")) for d in obs["_view"].values()).lower()
+    for tok in FORBIDDEN_REAL_TOKENS:
+        assert tok not in labels, f"anon _view leaks {tok!r}"
+    # the anon count labels ARE the anon vocabulary (came through COUNT_KEYS)
+    assert "waterway1_count" in labels and "waterway2_count" in labels
