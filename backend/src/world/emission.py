@@ -31,31 +31,30 @@ def analyst_briefing(h: HiddenState, cfg: WorldConfig) -> str:
 
 
 def _supplier_row(sid: str, sup: SupplierState, cfg: WorldConfig) -> dict:
-    """One scorecard row. Drifting suppliers (spot) read their OTIF/lead from
-    the visible band of their reliability chain (the deliberate 1-week
-    'slipping' ambiguity lives here, A5); frozen suppliers show constants.
-    NEVER reads the disruption state (observation independence)."""
+    """One scorecard row, fully driven by the supplier's profile (config.
+    SUPPLIERS) -- no instance-name branch. A drifting supplier reads its
+    OTIF/lead/band from the visible band of its reliability chain (the
+    deliberate 1-week 'slipping' ambiguity, A5); a frozen supplier shows the
+    constants its profile declares. NEVER reads the disruption state
+    (observation independence). Adding supplier #4 is one SUPPLIERS entry."""
     prof = SUPPLIERS[sid]
     if prof["drifts"]:
         band = sup.regime  # ontime|slipping|failing|defunct (Lever 1)
         otif, lead = SUPPLIER_SCORECARD[band]
-    elif sid == "qualified":
+    else:
         band, otif, lead = "ontime", prof["otif"], prof["lead"]
-    else:  # backup
-        band = "ontime"
-        otif, lead = cfg.backup_base_otif, cfg.backup_lead_days
     row = {"id": sid, "otif": otif, "lead_days": lead, "band": band,
-           "onboard_lead": prof["onboard_weeks"]
-           if prof["onboard_weeks"] is not None else cfg.backup_onboard_weeks}
-    # unit economics, per supplier: spot discounts, qualified/backup add a delta
-    if sid == "spot":
-        row["unit_discount"] = cfg.spot_unit_discount
-        row["unit_delta"] = -cfg.spot_unit_discount
-    elif sid == "qualified":
-        row["unit_premium"] = cfg.qualified_premium
-        row["unit_delta"] = cfg.qualified_premium
-    else:  # backup
-        row["unit_delta"] = cfg.backup_unit_delta
+           "onboard_lead": prof["onboard_weeks"]}
+    # unit economics, per supplier. The profile names the cfg field holding
+    # the magnitude (cfg stays the single source of truth -- no number is
+    # duplicated here) plus the sign and the optional extra display key. A
+    # discount shows unit_discount, a premium shows unit_premium; backup shows
+    # neither, just the signed delta.
+    econ = prof["econ"]
+    magnitude = getattr(cfg, econ["attr"])
+    if econ["key"]:
+        row[econ["key"]] = magnitude
+    row["unit_delta"] = econ["sign"] * magnitude
     return row
 
 

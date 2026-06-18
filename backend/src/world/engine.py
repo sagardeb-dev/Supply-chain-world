@@ -7,14 +7,12 @@ only in _build_obs (R4)."""
 import random
 
 from .config import SUPPLIERS, WorldConfig
-from .emission import (analyst_briefing, news_bulletin, observe_counts,
-                       observe_scorecard)
+from .emission import analyst_briefing
 from .contracts import Contract, contract_open, TERM_MENU, terms_for
 from .logistics import Books, resolve_week
 from .modules import REGISTRY
 from .state import SupplierState
-from .semantics import (COUNT_KEYS, ROUTE_DISPLAY, STATUS_DISPLAY,
-                        SUPPLIER_DISPLAY)
+from .semantics import ROUTE_DISPLAY, STATUS_DISPLAY, SUPPLIER_DISPLAY
 from .state import HiddenState
 
 HIDDEN_KEYS = {"event_state", "event_age", "disruption_type",
@@ -194,23 +192,28 @@ class World:
         return obs, cost, self.done, info
 
     def _build_obs(self, arrived: int, costs: dict) -> dict:
-        keymap = COUNT_KEYS[self.cfg.semantics]
-        counts = observe_counts(self.hidden, self.cfg)
+        # the latent factors emit their own slices (counts+bulletin, scorecard)
+        # by iterating REGISTRY -- no hand-listed observe_* call. The engine
+        # only owns the logistics/contract keys below.
         obs = {
             "week": self.week,
-            **{keymap[k]: v for k, v in counts.items()},
-            "bulletin": news_bulletin(self.hidden, self.cfg),
             "inventory": self.books.inventory,
             "arrived": arrived,
             "pipeline": [self._display_shipment(s) for s in self.books.pipeline],
             "cost_breakdown": dict(costs),
-            **observe_scorecard(self.suppliers, self.cfg),  # {"suppliers": [...]}
             "contracts": [self._display_contract(c) for c in self.books.contracts],
             "contract_open": self._open_supplier_ids(),  # the auto-renewal prompt
             "term_menu": list(TERM_MENU),  # the negotiation options (R5)
         }
+        for m in REGISTRY:
+            obs.update(m.emit(self._module_state(m), self.cfg))
         assert not (HIDDEN_KEYS & obs.keys()), "hidden state leaked into observation"
         return obs
+
+    def _module_state(self, m):
+        """The live state a module's emit reads: the singleton world-state for
+        a drives=("",) module, the supplier roster for a roster module."""
+        return self.hidden if m.drives == ("",) else self.suppliers
 
     def _display_contract(self, c) -> dict:
         return {"supplier": SUPPLIER_DISPLAY[self.cfg.semantics][c.supplier],

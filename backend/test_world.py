@@ -887,7 +887,8 @@ def test_scorecard_backup_present_and_mid_tier():
     sc = scorecard()
     b = _row(sc, "backup")
     assert b["otif"] == 95
-    assert b["onboard_lead"] == CFG.backup_onboard_weeks
+    from src.world.config import SUPPLIERS as _SUP
+    assert b["onboard_lead"] == _SUP["backup"]["onboard_weeks"]
     # backup is mid-priced: a small premium, not spot's discount
     assert b["unit_delta"] == CFG.backup_unit_delta
 
@@ -1305,3 +1306,44 @@ def test_supplier_emit_byte_identical_to_scorecard():
             rost = roster(rel_state=state)
             assert SUPPLIER.emit(rost, mcfg) == observe_scorecard(rost, mcfg), \
                 (mode, state)
+
+
+# --- emit-driven obs: the scorecard economics golden (DRIFT RISK net) -------
+
+def test_scorecard_economics_golden_all_three_rows():
+    """Folding the per-supplier economics into a profile lookup is the one
+    place a number could silently drift. Pin the FULL economics fragment of
+    every row (incl. backup) byte-for-byte. spot shows unit_discount, qualified
+    unit_premium, backup neither -- only a signed unit_delta."""
+    sc = scorecard(rel_state="wobbling")  # spot drifting -> slipping band
+    rows = {r["id"]: r for r in sc["suppliers"]}
+    assert rows["qualified"]["unit_premium"] == CFG.qualified_premium
+    assert rows["qualified"]["unit_delta"] == CFG.qualified_premium
+    assert "unit_discount" not in rows["qualified"]
+    assert rows["spot"]["unit_discount"] == CFG.spot_unit_discount
+    assert rows["spot"]["unit_delta"] == -CFG.spot_unit_discount
+    assert "unit_premium" not in rows["spot"]
+    assert rows["backup"]["unit_delta"] == CFG.backup_unit_delta
+    assert "unit_discount" not in rows["backup"]
+    assert "unit_premium" not in rows["backup"]
+    # frozen OTIF/lead/onboard now live in the SUPPLIERS profile, not cfg
+    from src.world.config import SUPPLIERS
+    assert rows["backup"]["otif"] == SUPPLIERS["backup"]["otif"] == 95
+    assert rows["backup"]["lead_days"] == SUPPLIERS["backup"]["lead"] == 16
+    assert rows["backup"]["onboard_lead"] == SUPPLIERS["backup"]["onboard_weeks"] == 1
+
+
+def test_full_obs_unchanged_emit_driven():
+    """The whole obs (a real episode, fixed seed) is assembled by iterating
+    REGISTRY now. Drive two weeks sourcing spot and assert every obs key the
+    modules own is present and the engine keys are intact -- the leak guard
+    and the byte-identical emit pins (Task 1) are the deeper net."""
+    w = World()
+    obs0 = w.reset(3)
+    # disruption slice + supplier slice both present from week 0
+    assert {"suez_count", "bab_count", "cape_count", "bulletin"} <= obs0.keys()
+    assert "suppliers" in obs0 and len(obs0["suppliers"]) == 3
+    # engine-owned keys intact
+    assert {"week", "inventory", "arrived", "pipeline", "cost_breakdown",
+            "contracts", "contract_open", "term_menu"} <= obs0.keys()
+    assert not (HIDDEN_KEYS & obs0.keys())

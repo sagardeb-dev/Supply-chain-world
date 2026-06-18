@@ -28,19 +28,29 @@ SUPPLIER_SCORECARD = {
 }
 
 
-# Per-supplier display profile (factor-2 roster). "drifts" suppliers read their
-# OTIF band from a SupplierState reliability chain (the scorecard regime);
-# frozen suppliers show a constant base OTIF. unit_delta is the +/- per unit vs
-# the route base cost (spot's is the NEGATIVE of its discount). onboard_weeks is
-# how long before the supplier's FIRST order can ship (0 = already qualified).
-# Adding supplier #4 = one entry here. This is "Nth costs the same as 2nd".
+# Per-supplier display profile (factor-2 roster). Self-contained: each entry
+# declares everything the scorecard row needs, so _supplier_row has no
+# instance-name branch and adding supplier #4 is one entry ("Nth costs the
+# same as 2nd").
+#   drifts       -- True: OTIF/lead/band read from the SupplierState chain;
+#                   False: show the constant otif/lead below, band "ontime".
+#   otif/lead    -- frozen suppliers' constants (None for a drifting one).
+#   onboard_weeks-- weeks before this supplier's FIRST order can ship.
+#   econ         -- unit economics vs the route base cost. "attr" names the
+#                   WorldConfig field holding the magnitude (cfg stays the
+#                   single source of truth -- the cost arithmetic in
+#                   logistics/oracle reads the SAME fields). "sign" is the
+#                   direction of unit_delta; "key" is the extra display key
+#                   (unit_discount / unit_premium), or None for just a delta.
 SUPPLIERS = {
-    "qualified": {"drifts": False, "otif": 99, "lead": 14,
-                  "unit_delta": None, "onboard_weeks": 0},  # delta read from cfg
-    "spot":      {"drifts": True,  "otif": None, "lead": None,
-                  "unit_delta": None, "onboard_weeks": 0},  # band read from state
-    "backup":    {"drifts": False, "otif": None, "lead": None,
-                  "unit_delta": None, "onboard_weeks": None},  # read from cfg
+    "qualified": {"drifts": False, "otif": 99, "lead": 14, "onboard_weeks": 0,
+                  "econ": {"attr": "qualified_premium", "sign": 1,
+                           "key": "unit_premium"}},
+    "spot":      {"drifts": True,  "otif": None, "lead": None, "onboard_weeks": 0,
+                  "econ": {"attr": "spot_unit_discount", "sign": -1,
+                           "key": "unit_discount"}},
+    "backup":    {"drifts": False, "otif": 95, "lead": 16, "onboard_weeks": 1,
+                  "econ": {"attr": "backup_unit_delta", "sign": 1, "key": None}},
 }
 
 
@@ -78,11 +88,9 @@ class WorldConfig:
     # --- supplier economics ---
     spot_unit_discount: float = 1.5       # S is 1.5/unit cheaper than Q's lane cost
     qualified_premium: float = 1.0        # Q adds 1.0/unit over the route base cost
-    # --- backup supplier (Hangzhou): mid OTIF, small premium, 1-wk onboarding ---
-    backup_base_otif: int = 95            # mid-tier, between spot(88) and qualified(98)
-    backup_lead_days: int = 16
+    # --- backup supplier (Hangzhou) economics. OTIF/lead/onboarding live in
+    # the SUPPLIERS profile (display facts); only the unit delta is a cost knob.
     backup_unit_delta: float = 0.3        # a small premium (dearer than spot, < Q)
-    backup_onboard_weeks: int = 1         # cannot ship its FIRST order for 1 wk (R-later)
     # --- contracts (R4): a timer + terms. Default length; menu of lengths R5 ---
     contract_weeks: int = 8               # ~3 renewal events per 26-wk horizon
     contract_otif_floor: int = 85         # penalty clause threshold (R5)
