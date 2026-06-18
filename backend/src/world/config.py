@@ -67,6 +67,11 @@ class WorldConfig:
     demand_seasonal_persist: float = 0.85  # seasonal lift sticks week to week
     demand_seasonal_max: int = 8           # seasonal caps at ~8 wks
     demand_decline_persist: float = 0.97   # structural decline is sticky
+    # realized POS is a noisy draw around the regime mean (so the regime must be
+    # FILTERED over weeks, not read in one); the forward forecast is a second,
+    # noisier read of the same mean (demand sensing). ~Poisson spread at mean 20.
+    demand_noise_sd: float = 4.0           # sd of the realized weekly POS
+    demand_forecast_sd: float = 6.0        # sd of the forward forecast (noisier)
 
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam

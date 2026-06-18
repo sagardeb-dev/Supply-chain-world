@@ -1411,7 +1411,7 @@ def test_view_labels_never_leak_real_names_in_anon():
     assert "waterway1_count" in labels and "waterway2_count" in labels
 
 
-# --- module 3: demand (the first goal-2 factor; RICH world only) ----------
+# --- module 3: demand (first goal-2 factor; RICH world only; noisy v2) -----
 
 def test_demand_only_in_rich_registry():
     """The default world is the pinned 2-factor world; demand appears only in
@@ -1423,30 +1423,47 @@ def test_demand_only_in_rich_registry():
 
 def test_demand_band_onset_ambiguity():
     """The deliberate 1-week ambiguity (mirrors disruption 'crash'): promo and
-    seasonal ONSET (age 0) share band 'surge' -> identical pos_units; at age>=1
-    they separate (promo stays 26, seasonal rises to 30)."""
-    from src.world.modules.demand import DemandState, demand_units
+    seasonal ONSET (age 0) share the 'surge' MEAN -> indistinguishable in
+    expectation; at age>=1 the means separate (promo 26 vs seasonal 30)."""
+    from src.world.modules.demand import DemandState, DEMAND_MEANS
     promo0, seas0 = DemandState("promo_spike", 0), DemandState("seasonal_lift", 0)
     assert promo0.band == seas0.band == "surge"
-    assert demand_units(promo0, CFG) == demand_units(seas0, CFG)  # indistinguishable
+    assert promo0.mean == seas0.mean == DEMAND_MEANS["surge"]
     promo1, seas1 = DemandState("promo_spike", 1), DemandState("seasonal_lift", 1)
     assert (promo1.band, seas1.band) == ("promo", "seasonal")
-    assert demand_units(promo1, CFG) != demand_units(seas1, CFG)  # separated
+    assert promo1.mean != seas1.mean
     assert DemandState("normal").band == "base"
     assert DemandState("structural_decline").band == "depressed"
 
 
-def test_demand_emit_matches_levels_no_leak():
-    from src.world.modules.demand import DemandState, emit, DEMAND_LEVELS
-    for st in (DemandState("normal"), DemandState("promo_spike", 0),
-               DemandState("seasonal_lift", 2), DemandState("structural_decline", 5)):
-        assert emit(st, CFG) == {"pos_units": DEMAND_LEVELS[st.band]}
-        assert "regime" not in emit(st, CFG) and "band" not in emit(st, CFG)
+def test_demand_emit_is_noisy_pos_plus_forecast_no_leak():
+    """emit exposes the realized POS + the forward forecast (per-week draws on
+    the state), and NOTHING that leaks the hidden regime/age."""
+    from src.world.modules.demand import DemandState, emit
+    st = DemandState("seasonal_lift", 2, realized=33, forecast=28)
+    assert emit(st, CFG) == {"pos_units": 33, "demand_forecast": 28}
+    assert not ({"regime", "regime_age", "band"} & set(emit(st, CFG)))
+
+
+def test_demand_realized_is_noisy_around_the_mean():
+    """v2 fix for 'too deterministic': realized POS is a noisy draw around the
+    regime mean, so it is NOT a flat constant and the regime must be filtered."""
+    import random, statistics
+    from src.world.modules.demand import DemandState, step_demand
+    rng = random.Random(1)
+    vals, s = [], DemandState("normal")
+    for _ in range(500):
+        s = step_demand(s, rng, CFG)
+        if s.regime == "normal":
+            vals.append(s.realized)
+    assert len(set(vals)) > 5                      # genuinely noisy, not constant
+    assert abs(statistics.mean(vals) - 20) < 1.5   # centered on the base mean
 
 
 def test_demand_kernel_promo_fixed_length_decline_sticky():
     """promo is a fixed-length calendar event (exactly demand_promo_max wks);
-    decline is sticky. Semi-Markov (age-driven)."""
+    decline is sticky. Semi-Markov (age-driven). Noise draws don't change the
+    regime logic."""
     import random
     from src.world.modules.demand import DemandState, step_demand
     rng = random.Random(0)
@@ -1466,9 +1483,9 @@ def test_rich_world_demand_drives_consumption_and_is_deterministic():
         w = World(registry=RICH); w.reset(seed); rows = []
         while not w.done:
             o, c, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
-            rows.append((o["pos_units"], round(c, 4)))
+            rows.append((o["pos_units"], o["demand_forecast"], round(c, 4)))
         return rows
-    assert run(3) == run(3)  # deterministic
+    assert run(3) == run(3)  # deterministic despite the noise (seeded rng)
     bands = set()
     for seed in range(60):
         w = World(registry=RICH); w.reset(seed)
@@ -1476,6 +1493,13 @@ def test_rich_world_demand_drives_consumption_and_is_deterministic():
             w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
             bands.add(w.module_states["demand"].band)
     assert {"surge", "seasonal", "promo", "depressed"} <= bands
+
+
+def test_rich_world_obs_has_forward_forecast_channel():
+    """The agent gets a FORWARD demand-sensing signal, not just backward POS."""
+    from src.world.registry import RICH
+    w = World(registry=RICH); obs = w.reset(7)
+    assert "pos_units" in obs and "demand_forecast" in obs
 
 
 def test_default_world_demand_inert():
