@@ -25,7 +25,7 @@ modules/<name>/ package + its record + one REGISTRY entry here.
 from dataclasses import dataclass
 from typing import Callable
 
-from .modules import disruption, supplier
+from .modules import demand, disruption, supplier
 
 
 @dataclass(frozen=True)
@@ -51,6 +51,10 @@ def _init_supplier(cfg):
     return {sid: supplier.SupplierState() for sid in supplier.SUPPLIERS}
 
 
+def _init_demand(cfg):
+    return demand.DemandState()
+
+
 DISRUPTION = Module(
     id="disruption", kind="latent-factor",
     state_cls=disruption.HiddenState, kernel=disruption.step_hidden,
@@ -66,10 +70,24 @@ SUPPLIER = Module(
 )
 
 
+DEMAND = Module(
+    id="demand", kind="latent-factor",
+    state_cls=demand.DemandState, kernel=demand.step_demand,
+    emit=demand.emit, view=demand.view, drives=demand.DRIVES,
+    init=_init_demand,
+)
+
+
 # ORDER IS LOAD-BEARING: kernels consume rng in this order, so the hidden
 # trajectory is a function of the seed (exogeneity). Disruption first, then
 # supplier -- the same order engine.step drew in before the refactor.
 REGISTRY: tuple[Module, ...] = (DISRUPTION, SUPPLIER)
+
+# RICH world: the multi-factor registry. New factors APPEND after the base two,
+# so their rng draws come last and the disruption/supplier trajectories (and the
+# pinned single-factor golden) are unperturbed. Goal-2 worlds use this (or a
+# subset) via World(cfg, registry=RICH).
+RICH: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND)
 
 
 # ponytail: the paid analyst_briefing is deliberately NOT in any module's emit

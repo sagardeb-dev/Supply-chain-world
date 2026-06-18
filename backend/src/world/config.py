@@ -55,6 +55,19 @@ class WorldConfig:
     # punishing -- this is the only calibration knob the hedge turns on.
     crisis_backorder_kappa: float = 60.0  # = 3.0 x stockout_cost
 
+    # --- demand semi-Markov kernel (latent module #3, RICH worlds only) ---
+    # Unused unless the demand module is in the registry, so adding these does
+    # not touch the default 2-factor world. Grounded in demand sensing / CPFR /
+    # bullwhip: promo is a fixed-length calendar spike, seasonal a sustained
+    # lift, decline a sticky downshift.
+    demand_promo_onset: float = 0.03       # normal -> promo_spike
+    demand_seasonal_onset: float = 0.015   # normal -> seasonal_lift
+    demand_decline_onset: float = 0.005    # normal -> structural_decline
+    demand_promo_max: int = 4              # promo runs a fixed ~4 wks then ends
+    demand_seasonal_persist: float = 0.85  # seasonal lift sticks week to week
+    demand_seasonal_max: int = 8           # seasonal caps at ~8 wks
+    demand_decline_persist: float = 0.97   # structural decline is sticky
+
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam
     suez_chokepoint_offset: int = 2       # canal transit ~day 20 of 28

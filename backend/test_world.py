@@ -1409,3 +1409,78 @@ def test_view_labels_never_leak_real_names_in_anon():
         assert tok not in labels, f"anon _view leaks {tok!r}"
     # the anon count labels ARE the anon vocabulary (came through COUNT_KEYS)
     assert "waterway1_count" in labels and "waterway2_count" in labels
+
+
+# --- module 3: demand (the first goal-2 factor; RICH world only) ----------
+
+def test_demand_only_in_rich_registry():
+    """The default world is the pinned 2-factor world; demand appears only in
+    RICH, and appended LAST -- so it cannot perturb the disruption golden."""
+    from src.world.registry import REGISTRY, RICH
+    assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
+    assert tuple(m.id for m in RICH) == ("disruption", "supplier", "demand")
+
+
+def test_demand_band_onset_ambiguity():
+    """The deliberate 1-week ambiguity (mirrors disruption 'crash'): promo and
+    seasonal ONSET (age 0) share band 'surge' -> identical pos_units; at age>=1
+    they separate (promo stays 26, seasonal rises to 30)."""
+    from src.world.modules.demand import DemandState, demand_units
+    promo0, seas0 = DemandState("promo_spike", 0), DemandState("seasonal_lift", 0)
+    assert promo0.band == seas0.band == "surge"
+    assert demand_units(promo0, CFG) == demand_units(seas0, CFG)  # indistinguishable
+    promo1, seas1 = DemandState("promo_spike", 1), DemandState("seasonal_lift", 1)
+    assert (promo1.band, seas1.band) == ("promo", "seasonal")
+    assert demand_units(promo1, CFG) != demand_units(seas1, CFG)  # separated
+    assert DemandState("normal").band == "base"
+    assert DemandState("structural_decline").band == "depressed"
+
+
+def test_demand_emit_matches_levels_no_leak():
+    from src.world.modules.demand import DemandState, emit, DEMAND_LEVELS
+    for st in (DemandState("normal"), DemandState("promo_spike", 0),
+               DemandState("seasonal_lift", 2), DemandState("structural_decline", 5)):
+        assert emit(st, CFG) == {"pos_units": DEMAND_LEVELS[st.band]}
+        assert "regime" not in emit(st, CFG) and "band" not in emit(st, CFG)
+
+
+def test_demand_kernel_promo_fixed_length_decline_sticky():
+    """promo is a fixed-length calendar event (exactly demand_promo_max wks);
+    decline is sticky. Semi-Markov (age-driven)."""
+    import random
+    from src.world.modules.demand import DemandState, step_demand
+    rng = random.Random(0)
+    s = DemandState("promo_spike", 0)
+    for _ in range(CFG.demand_promo_max - 1):
+        s = step_demand(s, rng, CFG)
+        assert s.regime == "promo_spike"
+    assert step_demand(s, rng, CFG).regime == "normal"  # deterministic exit at cap
+    persists = sum(step_demand(DemandState("structural_decline", 1), rng, CFG).regime
+                   == "structural_decline" for _ in range(400))
+    assert persists / 400 > 0.9
+
+
+def test_rich_world_demand_drives_consumption_and_is_deterministic():
+    from src.world.registry import RICH
+    def run(seed):
+        w = World(registry=RICH); w.reset(seed); rows = []
+        while not w.done:
+            o, c, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+            rows.append((o["pos_units"], round(c, 4)))
+        return rows
+    assert run(3) == run(3)  # deterministic
+    bands = set()
+    for seed in range(60):
+        w = World(registry=RICH); w.reset(seed)
+        while not w.done:
+            w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+            bands.add(w.module_states["demand"].band)
+    assert {"surge", "seasonal", "promo", "depressed"} <= bands
+
+
+def test_default_world_demand_inert():
+    """Inert-by-absence: the default world has no demand module, no pos_units,
+    and consumes the constant cfg.weekly_demand."""
+    w = World(); obs = w.reset(3)
+    assert "demand" not in w.module_states
+    assert "pos_units" not in obs

@@ -193,7 +193,7 @@ class World:
         arrived, costs = resolve_week(
             self.books, qty, supplier if qty else None,
             route if qty else None, self.hidden, self.suppliers["spot"],
-            self.week, self.cfg)
+            self.week, self.cfg, demand=self._demand_units())
         if briefed:
             costs["briefing"] = self.cfg.briefing_cost
         # Lever 3: carrying >=2 live contracts costs a weekly overhead. Counted
@@ -249,6 +249,17 @@ class World:
         """The live state a module's emit reads: its entry in module_states
         (a singleton state, or the roster dict)."""
         return self.module_states[m.id]
+
+    def _demand_units(self):
+        """This week's realized demand: from the demand module if the registry
+        includes it, else None (resolve_week falls back to cfg.weekly_demand).
+        Lazy import keeps the engine free of a hard demand dependency -- demand
+        is an optional, rich-world factor."""
+        d = self.module_states.get("demand")
+        if d is None:
+            return None
+        from .modules.demand import demand_units
+        return demand_units(d, self.cfg)
 
     def _display_contract(self, c) -> dict:
         return {"supplier": SUPPLIER_DISPLAY[self.cfg.semantics][c.supplier],
