@@ -18,7 +18,7 @@ from src.world import World, WorldConfig
 from src.world.emission import (analyst_briefing, news_bulletin,
                                observe_counts, observe_scorecard)
 from src.world.engine import HIDDEN_KEYS
-from src.world.logistics import Books, resolve_week
+from src.world.substrate import Books, resolve_week
 from src.world.contracts import Contract, contract_open, TERM_MENU, terms_for
 from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
 from src.world.semantics import BULLETINS

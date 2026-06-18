@@ -9,10 +9,11 @@ import random
 from .config import SUPPLIERS, WorldConfig
 from .emission import analyst_briefing
 from .contracts import Contract, contract_open, TERM_MENU, terms_for
-from .logistics import Books, resolve_week
+from .substrate import Books, resolve_week
 from .modules import REGISTRY
 from .state import SupplierState
-from .semantics import ROUTE_DISPLAY, STATUS_DISPLAY, SUPPLIER_DISPLAY
+from .substrate.semantics import ROUTE_DISPLAY, STATUS_DISPLAY
+from .semantics import SUPPLIER_DISPLAY
 from .state import HiddenState
 
 HIDDEN_KEYS = {"event_state", "event_age", "disruption_type",

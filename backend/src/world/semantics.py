@@ -84,25 +84,11 @@ BRIEFINGS = {
     },
 }
 
-ROUTE_DISPLAY = {
-    "real": {"suez": "suez", "cape": "cape"},
-    "anon": {"suez": "route_1", "cape": "route_2"},
-}
-ROUTE_PARSE = {mode: {v: k for k, v in m.items()}
-               for mode, m in ROUTE_DISPLAY.items()}
-
 COUNT_KEYS = {
     "real": {"suez_count": "suez_count", "bab_count": "bab_count",
              "cape_count": "cape_count"},
     "anon": {"suez_count": "waterway1_count", "bab_count": "strait_count",
              "cape_count": "waterway2_count"},
-}
-
-STATUS_DISPLAY = {
-    "real": {"at_sea": "at_sea", "queued_at_suez": "queued_at_suez",
-             "diverted_via_cape": "diverted_via_cape"},
-    "anon": {"at_sea": "at_sea", "queued_at_suez": "queued_at_waterway1",
-             "diverted_via_cape": "diverted_via_waterway2"},
 }
 
 # Supplier id + scorecard-band labels (factor 2). Same real/anon ablation
