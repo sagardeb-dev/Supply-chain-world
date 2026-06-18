@@ -7,13 +7,14 @@ only in _build_obs (R4)."""
 import random
 
 from .config import SUPPLIERS, WorldConfig
-from .emission import analyst_briefing
-from .contracts import Contract, contract_open, TERM_MENU, terms_for
-from .logistics import Books, resolve_week
-from .modules import REGISTRY
-from .state import SupplierState
-from .semantics import ROUTE_DISPLAY, STATUS_DISPLAY, SUPPLIER_DISPLAY
-from .state import HiddenState
+from .modules.disruption import HiddenState, analyst_briefing
+from .modules.supplier import (SupplierState, Contract, contract_open,
+                               TERM_MENU, terms_for)
+from .substrate.books import Books
+from .substrate.logistics import resolve_week
+from .registry import REGISTRY
+from .substrate.semantics import ROUTE_DISPLAY, STATUS_DISPLAY
+from .modules.supplier import SUPPLIER_DISPLAY
 
 HIDDEN_KEYS = {"event_state", "event_age", "disruption_type",
                "cape_local_congestion", "regime", "canal_blocked",

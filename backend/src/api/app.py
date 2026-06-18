@@ -23,9 +23,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.world import World, WorldConfig
-from src.world.causal_oracle import CausalOracle, causal_play
-from src.world.oracle import oracle_plan
-from src.world.semantics import ROUTE_PARSE, SUPPLIER_PARSE
+from src.world.oracle.causal import CausalOracle, causal_play
+from src.world.oracle.clairvoyant import oracle_plan
+from src.world.substrate.semantics import ROUTE_PARSE
+from src.world.modules.supplier import SUPPLIER_PARSE
 from src.agent.service import svc_briefing, svc_step
 from report_oracle import fixed_policy_cost, base_stock_cost
 

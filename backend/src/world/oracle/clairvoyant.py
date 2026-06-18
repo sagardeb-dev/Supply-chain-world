@@ -8,9 +8,9 @@ value with no future knowledge) comes next - see V1_CHANGE_LOG.md."""
 
 from functools import lru_cache
 
-from .config import WorldConfig
-from .engine import World
-from .state import HiddenState
+from ..config import WorldConfig
+from ..engine import World
+from ..modules.disruption import HiddenState
 
 
 def hidden_trajectory(seed: int, cfg: WorldConfig) -> list[HiddenState]:

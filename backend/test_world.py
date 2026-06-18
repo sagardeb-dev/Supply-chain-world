@@ -15,18 +15,20 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.world import World, WorldConfig
-from src.world.emission import (analyst_briefing, news_bulletin,
-                               observe_counts, observe_scorecard)
+from src.world.modules.disruption import (analyst_briefing, news_bulletin,
+                                          observe_counts, BULLETINS,
+                                          HiddenState, step_hidden)
+from src.world.modules.supplier import (observe_scorecard, Contract,
+                                        contract_open, TERM_MENU, terms_for,
+                                        SupplierState, step_supplier)
 from src.world.engine import HIDDEN_KEYS
-from src.world.logistics import Books, resolve_week
-from src.world.contracts import Contract, contract_open, TERM_MENU, terms_for
-from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
-from src.world.semantics import BULLETINS
-from src.world.state import HiddenState, SupplierState
-from src.world.causal_oracle import (EMPTY_PIPE, CausalOracle, canonical,
+from src.world.substrate.books import Books
+from src.world.substrate.logistics import resolve_week
+from src.world.oracle.clairvoyant import (arrival_week, hidden_trajectory,
+                                          oracle_plan)
+from src.world.oracle.causal import (EMPTY_PIPE, CausalOracle, canonical,
                                      causal_play, resolve_rel,
                                      transition_dist)
-from src.world.transition import step_hidden, step_supplier
 
 
 CFG = WorldConfig()
@@ -152,7 +154,7 @@ def test_no_duration_language_in_any_text():
     banned = ("week", "month", "day", "year", "soon", "brief ", "extended",
               "short", "long", "prolonged", "temporar", "indefinite",
               "likely", "probab", "%")
-    from src.world.semantics import BRIEFINGS
+    from src.world.modules.disruption import BRIEFINGS
     for table in (BULLETINS, BRIEFINGS):
         for mode in table:
             for key, text in table[mode].items():
@@ -1254,7 +1256,7 @@ def test_registry_covers_exactly_the_two_factors():
     (observe_counts), not as its own module -- 'two modules' != 'two
     stochastic roots'. Pin the count and the ids so a stray module can't
     sneak in."""
-    from src.world.modules import REGISTRY
+    from src.world.registry import REGISTRY
     assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
     # order is load-bearing (rng draw order = exogeneity); pin it explicitly
     assert REGISTRY[0].kernel is step_hidden
@@ -1267,7 +1269,7 @@ def test_supplier_module_drives_only_drifting_roster_ids():
     """The supplier module advances exactly the roster ids whose profile
     sets drifts=True (only spot in R1), read from SUPPLIERS -- no literal
     'spot' in the module record."""
-    from src.world.modules import SUPPLIER
+    from src.world.registry import SUPPLIER
     from src.world.config import SUPPLIERS
     assert SUPPLIER.drives == tuple(sid for sid, p in SUPPLIERS.items()
                                     if p["drifts"])
@@ -1279,8 +1281,8 @@ def test_disruption_emit_byte_identical_to_handbuilt_obs():
     through the per-semantics map) plus the bulletin, byte-for-byte, in
     BOTH semantics modes -- so swapping _build_obs to call emit cannot move
     a single byte."""
-    from src.world.modules import DISRUPTION
-    from src.world.semantics import COUNT_KEYS
+    from src.world.registry import DISRUPTION
+    from src.world.modules.disruption import COUNT_KEYS
     states = [CALM, HiddenState("watch"), SHORT, LONG,
               HiddenState("disruption", 1, "short"),
               HiddenState("disruption", 1, "long"), RECOV,
@@ -1299,7 +1301,7 @@ def test_disruption_emit_byte_identical_to_handbuilt_obs():
 def test_supplier_emit_byte_identical_to_scorecard():
     """The supplier module's emit IS observe_scorecard -- byte-for-byte over
     the whole roster, in both semantics modes."""
-    from src.world.modules import SUPPLIER
+    from src.world.registry import SUPPLIER
     for mode in ("real", "anon"):
         mcfg = WorldConfig(semantics=mode)
         for state in ("reliable", "wobbling", "degraded", "defunct"):
@@ -1390,3 +1392,40 @@ def test_view_labels_never_leak_real_names_in_anon():
         assert tok not in labels, f"anon _view leaks {tok!r}"
     # the anon count labels ARE the anon vocabulary (came through COUNT_KEYS)
     assert "waterway1_count" in labels and "waterway2_count" in labels
+
+
+# --- tier-1 sealed-box invariant (006 structural pin) ----------------------
+
+def test_modules_are_sealed_boxes_no_cross_import():
+    """The tier-1 latent modules must NEVER import each other. That one-way
+    isolation IS Becker transition + observation independence made structural:
+    if disruption.py could import supplier.py (or vice-versa) a kernel/emission
+    could read the other factor, correlations would bleed through the DBN, and
+    the joint belief would stop factoring -- silently killing the exact oracle.
+    A grep-level pin so the guarantee can't regress in a later edit."""
+    import pathlib
+    import src.world.modules.disruption as d
+    import src.world.modules.supplier as s
+
+    dsrc = pathlib.Path(d.__file__).read_text()
+    ssrc = pathlib.Path(s.__file__).read_text()
+    assert "supplier" not in _imported_module_names(dsrc), \
+        "disruption module imports the supplier module (sealed-box violation)"
+    assert "disruption" not in _imported_module_names(ssrc), \
+        "supplier module imports the disruption module (sealed-box violation)"
+
+
+def _imported_module_names(source: str) -> set:
+    """The set of module names this source imports (last dotted segment of
+    each `import x`/`from x import ...`), so the sealed-box pin checks actual
+    imports, not incidental mentions in comments or strings."""
+    import ast
+    names = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                names.add(a.name.split(".")[-1])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                names.add(node.module.split(".")[-1])
+    return names

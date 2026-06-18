@@ -22,8 +22,6 @@ export class AgentPanel {
     this._log    = document.getElementById('agent-log');
     this._runBtn = document.getElementById('ag-run');
     this._advBtn = document.getElementById('ag-advance');
-    this._status = document.getElementById('ag-status');
-    this._lastCall = null;  // last tool-call card, so its result can dock under it
 
     this._runBtn.addEventListener('click', () => this.run());
     this._advBtn.addEventListener('click', () => this.advance());
@@ -40,7 +38,6 @@ export class AgentPanel {
     this._closeSource();
     this._clearLog();
     this._setAdvance(false);
-    this._setStatus('running', `${model} · seed ${seed}`);
 
     let res;
     try {
@@ -157,14 +154,12 @@ export class AgentPanel {
   // ── event renderers ──────────────────────────────────────────────────────
 
   _onThought({ text }) {
-    this._lastCall = null;
-    // coalesce consecutive chunks into one assistant message bubble
+    // coalesce consecutive chunks into one bubble
     if (!this._lastThought) {
-      const row = this._row('assistant');
-      const body = row.querySelector('.ag-body');
-      body.classList.add('ag-text');
-      this._log.appendChild(row);
-      this._lastThought = body;
+      const div = document.createElement('div');
+      div.className = 'ag-thought';
+      this._log.appendChild(div);
+      this._lastThought = div;
     }
     this._lastThought.textContent += text;
     this._scrollLog();
@@ -172,27 +167,10 @@ export class AgentPanel {
 
   _onToolCall({ name, args }) {
     this._lastThought = null;  // break thought coalescing
-    const row = this._row('tool-call');
-    const body = row.querySelector('.ag-body');
-
-    const head = document.createElement('div');
-    head.className = 'ag-card-head';
-    head.innerHTML = '<span class="ag-card-kind">tool call</span><b>' + escapeHtml(name) + '</b>';
-    body.appendChild(head);
-
-    const entries = Object.entries(args ?? {});
-    if (entries.length) {
-      const args_el = document.createElement('dl');
-      args_el.className = 'ag-args';
-      for (const [k, v] of entries) {
-        const dt = document.createElement('dt'); dt.textContent = k;
-        const dd = document.createElement('dd'); dd.textContent = fmtVal(v);
-        args_el.append(dt, dd);
-      }
-      body.appendChild(args_el);
-    }
-    this._log.appendChild(row);
-    this._lastCall = body;   // a matching result docks under this card
+    const div = document.createElement('div');
+    div.className = 'ag-tool';
+    div.innerHTML = '▸ <b>' + name + '</b>(' + compactArgs(args ?? {}) + ')';
+    this._log.appendChild(div);
     this._scrollLog();
   }
 
@@ -204,90 +182,36 @@ export class AgentPanel {
       this._store.applyObs(data.obs, data.cost);
     }
     this._lastThought = null;
-
+    const div = document.createElement('div');
+    div.className = 'ag-result';
     const text = String(data.content ?? '');
-    const { pretty, isJson } = prettyJson(text);
-    const long = pretty.length > 220 || pretty.split('\n').length > 4;
-
-    const res = document.createElement('div');
-    res.className = 'ag-result-line';
-    const arrow = document.createElement('span');
-    arrow.className = 'ag-arrow'; arrow.textContent = '→';
-
-    const wrap = document.createElement('div');
-    wrap.className = 'ag-result-wrap';
-    const pre = document.createElement(isJson ? 'pre' : 'span');
-    pre.className = 'ag-result-text' + (isJson ? ' ag-json' : '');
-    pre.textContent = pretty;
-    wrap.appendChild(pre);
-
-    if (long) {
-      // collapse by default; one click reveals the full payload
-      wrap.classList.add('collapsed');
-      const toggle = document.createElement('button');
-      toggle.className = 'ag-toggle';
-      toggle.textContent = 'show ' + (isJson ? 'JSON' : 'full') + ' (' + pretty.length + ' chars)';
-      toggle.addEventListener('click', () => {
-        const open = wrap.classList.toggle('collapsed');
-        toggle.textContent = open
-          ? 'show ' + (isJson ? 'JSON' : 'full') + ' (' + pretty.length + ' chars)'
-          : 'hide';
-      });
-      wrap.appendChild(toggle);
-    }
-
-    res.append(arrow, wrap);
-    if (data.cost != null) {
-      const chip = document.createElement('span');
-      chip.className = 'ag-cost-chip';
-      chip.textContent = '$' + data.cost;
-      res.appendChild(chip);
-    }
-
-    // dock the result under the call that produced it; otherwise stand alone
-    if (this._lastCall) {
-      this._lastCall.appendChild(res);
-      this._lastCall = null;
-    } else {
-      const row = this._row('tool-call');
-      row.querySelector('.ag-body').appendChild(res);
-      this._log.appendChild(row);
-    }
+    div.textContent = text.length > 400 ? text.slice(0, 400) + '…' : text;
+    this._log.appendChild(div);
     this._scrollLog();
   }
 
   _onInterrupt({ proposals }) {
     this._lastThought = null;
-    this._lastCall = null;
-    const row = this._row('interrupt');
-    const body = row.querySelector('.ag-body');
-    const head = document.createElement('div');
-    head.className = 'ag-card-head';
-    head.innerHTML = '<span class="ag-card-kind">proposed — awaiting advance</span>';
-    body.appendChild(head);
-    for (const p of (proposals ?? [])) {
-      const line = document.createElement('div');
-      line.className = 'ag-proposal';
-      line.innerHTML = '<b>' + escapeHtml(p.name) + '</b>(' + escapeHtml(compactArgs(p.args ?? {})) + ')';
-      body.appendChild(line);
-    }
-    this._log.appendChild(row);
+    const compact = (proposals ?? [])
+      .map(p => p.name + '(' + compactArgs(p.args ?? {}) + ')')
+      .join(', ');
+    const div = document.createElement('div');
+    div.className = 'ag-interrupt';
+    div.textContent = 'proposed: ' + compact + ' — click Advance';
+    this._log.appendChild(div);
     this._scrollLog();
     this._setAdvance(true);
-    this._setStatus('waiting', 'click advance ▶');
   }
 
   _onDone({ seed, total_cost }) {
     this._lastThought = null;
-    this._lastCall = null;
     this._closeSource();
     const div = document.createElement('div');
-    div.className = 'ag-banner ag-done';
-    div.innerHTML = '✓ episode complete · total cost <b>$' + total_cost + '</b>';
+    div.className = 'ag-done';
+    div.textContent = 'episode done · total cost $' + total_cost;
     this._log.appendChild(div);
     this._scrollLog();
     this._setAdvance(false);
-    this._setStatus('done', 'cost $' + total_cost);
     // wire into the existing oracle scoreboard
     if (typeof window.__agentOnDone === 'function') {
       window.__agentOnDone(seed, total_cost);
@@ -296,33 +220,17 @@ export class AgentPanel {
 
   _onError({ message }) {
     this._lastThought = null;
-    this._lastCall = null;
     this._closeSource();
     this._appendError(message);
     this._setAdvance(false);
-    this._setStatus('error', message);
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
 
-  // a chat row: avatar + body, classed by role so CSS can style each kind.
-  _row(kind) {
-    const row = document.createElement('div');
-    row.className = 'ag-row ag-' + kind;
-    const avatar = document.createElement('div');
-    avatar.className = 'ag-avatar';
-    avatar.textContent = kind === 'assistant' ? '◆'
-      : kind === 'interrupt' ? '⏸' : '⚙';
-    const body = document.createElement('div');
-    body.className = 'ag-body';
-    row.append(avatar, body);
-    return row;
-  }
-
   _appendError(msg) {
     const div = document.createElement('div');
-    div.className = 'ag-banner ag-error';
-    div.textContent = '⚠ ' + msg;
+    div.className = 'ag-error';
+    div.textContent = 'error: ' + msg;
     this._log.appendChild(div);
     this._scrollLog();
   }
@@ -330,7 +238,6 @@ export class AgentPanel {
   _clearLog() {
     this._log.innerHTML = '';
     this._lastThought = null;
-    this._lastCall = null;
   }
 
   _scrollLog() {
@@ -340,31 +247,4 @@ export class AgentPanel {
   _setAdvance(enabled) {
     this._advBtn.disabled = !enabled;
   }
-
-  _setStatus(state, detail) {
-    if (!this._status) return;
-    this._status.dataset.state = state;
-    this._status.textContent = detail ? state + ' · ' + detail : state;
-  }
-}
-
-// if the result text is JSON, pretty-print it (2-space indent); else return as-is
-function prettyJson(text) {
-  const t = text.trim();
-  if (t && (t[0] === '{' || t[0] === '[')) {
-    try { return { pretty: JSON.stringify(JSON.parse(t), null, 2), isJson: true }; }
-    catch { /* not valid JSON, fall through */ }
-  }
-  return { pretty: text, isJson: false };
-}
-
-// pretty-print a tool-arg value: scalars bare, objects/arrays as compact JSON
-function fmtVal(v) {
-  if (v == null) return String(v);
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 }

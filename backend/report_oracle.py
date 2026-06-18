@@ -10,10 +10,10 @@ Regret decomposition per seed:
   causal - clairvoyant = luck premium (information was NOT available)
 """
 
-from src.world.causal_oracle import CausalOracle, causal_play
+from src.world.oracle.causal import CausalOracle, causal_play
 from src.world.config import WorldConfig
 from src.world.engine import World
-from src.world.oracle import oracle_plan
+from src.world.oracle.clairvoyant import oracle_plan
 
 
 def fixed_policy_cost(seed: int, route: str, cfg: WorldConfig) -> float:
