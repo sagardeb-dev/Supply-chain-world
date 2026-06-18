@@ -16,7 +16,7 @@ from .books import Books, Shipment, _advance
 
 def resolve_week(books: Books, qty: int, supplier: str | None,
                  route: str | None, h: HiddenState, sup: SupplierState,
-                 week: int, cfg: WorldConfig, demand: int | None = None):
+                 week: int, cfg: WorldConfig, effects: dict | None = None):
     """Dispatch this week's order (if any), move every in-flight ship one
     week, land arrivals, consume demand. Returns (arrived_qty, cost_breakdown).
 
@@ -52,10 +52,11 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     books.pipeline = [s for s in books.pipeline if s.arrives_week != week]
     books.inventory += arrived
 
-    # weekly demand: the demand module threads it (rich world), else the
-    # constant cfg.weekly_demand (default world). resolve_week takes a NUMBER,
-    # never the demand module -- the substrate stays module-agnostic.
-    dem = cfg.weekly_demand if demand is None else demand
+    # substrate effects from the active modules (module-agnostic: named numbers,
+    # never the modules). demand replaces the constant weekly_demand (rich world);
+    # default world yields {} -> the constants. freight_mult etc. join here later.
+    eff = effects or {}
+    dem = eff.get("demand", cfg.weekly_demand)
     served = min(books.inventory, dem)
     shortfall = dem - served
     books.inventory -= served

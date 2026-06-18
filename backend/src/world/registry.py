@@ -40,6 +40,10 @@ class Module:
     init: Callable | None = None  # (cfg) -> initial state (singleton) | {id: state} (roster).
                                   # None falls back to state_cls(). The module owns its own
                                   # reset, so the engine stays factor-agnostic.
+    effect: Callable | None = None  # (state, cfg) -> {name: contribution} merged into
+                                  # resolve_week's `effects` (demand units, freight mult,
+                                  # ...). None = no substrate effect (the base disruption/
+                                  # supplier are passed explicitly as h/sup instead).
 
 
 def _init_disruption(cfg):
@@ -74,7 +78,7 @@ DEMAND = Module(
     id="demand", kind="latent-factor",
     state_cls=demand.DemandState, kernel=demand.step_demand,
     emit=demand.emit, view=demand.view, drives=demand.DRIVES,
-    init=_init_demand,
+    init=_init_demand, effect=demand.effect,
 )
 
 

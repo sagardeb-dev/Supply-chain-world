@@ -18,6 +18,12 @@ def demand_units(d: DemandState, cfg: WorldConfig) -> int:
     return d.realized
 
 
+def effect(d: DemandState, cfg: WorldConfig) -> dict:
+    """Substrate effect: this week's demand replaces the constant weekly_demand
+    in resolve_week. The one place the demand factor touches the physics."""
+    return {"demand": d.realized}
+
+
 def emit(d: DemandState, cfg: WorldConfig) -> dict:
     """Passive weekly emission: the noisy realized POS the agent observes, plus
     a noisy forward forecast of underlying demand (demand sensing)."""
