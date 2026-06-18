@@ -7,6 +7,16 @@ const REGIME_COLORS = {
   blockage: '#9333ea', crisis: '#dc2626', recovery: '#2e7fb8',
 };
 
+// _view keys a bespoke panel already renders (counts -> news accent, bulletin
+// -> news text, suppliers -> scorecard). Everything else in the manifest is
+// rendered generically by role, so a new passive module needs no new JS. The
+// anon count keys alias the real ones, so include both spellings.
+const OWNED_VIEW_KEYS = new Set([
+  'suez_count', 'bab_count', 'cape_count',
+  'waterway1_count', 'strait_count', 'waterway2_count',
+  'bulletin', 'suppliers',
+]);
+
 // One week-cell for a regime strip (shared by the x-ray rail and the
 // end-of-episode reveal). `marks` is an optional short overlay string.
 function regimeCell(week, regime, tip, marks = '') {
@@ -170,6 +180,39 @@ export class UI {
     }
 
     this._renderScorecard(obs);
+    this._renderByRole(obs);
+  }
+
+  // Generic passive-role renderer (the "zero new JS" property). Iterates the
+  // _view manifest and renders any scalar/series/band key NOT already owned by
+  // a bespoke panel as a labelled row -- so a new PASSIVE latent module
+  // appears with no ui.js or HTML edit. Action-levers (the scorecard, the
+  // order deck) stay bespoke: they compose action facts (sourced/contracted/
+  // defunct) the store would have to pre-compose, which is real interaction
+  // code, not a passive display -- deliberately out of scope here.
+  _renderByRole(obs) {
+    const host = $('role-panel');
+    if (!host) return;
+    host.innerHTML = '';
+    const view = obs.view ?? {};
+    const values = obs.viewValues ?? {};
+    for (const [key, meta] of Object.entries(view)) {
+      if (OWNED_VIEW_KEYS.has(key)) continue;   // a bespoke panel renders it
+      const row = document.createElement('div');
+      if (meta.role === 'scalar' || meta.role === 'band') {
+        row.className = `role-row role-${meta.role}`;
+        const accent = meta.role === 'band' ? ` band-${values[key]}` : '';
+        row.innerHTML = `<span class="role-label">${meta.label}</span>` +
+          `<span class="role-val${accent}">${values[key]}</span>`;
+      } else if (meta.role === 'series') {
+        row.className = 'role-row role-series';
+        row.innerHTML = `<span class="role-label">${meta.label}</span>` +
+          `<span class="role-text">${values[key]}</span>`;
+      } else {
+        continue;  // roster-row/chip/timeline are owned by bespoke panels
+      }
+      host.appendChild(row);
+    }
   }
 
   // factor 2 HUD: a two-row OTIF scorecard. Severity accent by OTIF band

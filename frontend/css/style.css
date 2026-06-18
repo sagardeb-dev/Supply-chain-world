@@ -455,3 +455,23 @@ body[data-mode="agent"] #briefing-card { display: none !important; }
 .contract-chip .ct-ends { color: #94a3b8; }
 .contract-chip .ct-price { margin-left: auto; color: #cbd5e1; }
 .seg button.backup.active { outline: 2px solid #8b5cf6; }
+
+/* generic passive role rows (the "zero new JS" panel). Minimal, matches the
+   scorecard idiom so a new passive module renders cleanly with no bespoke CSS. */
+.role-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 8px;
+  margin-top: 4px;
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--cape);
+  border-radius: 4px;
+  background: rgba(13, 24, 41, 0.5);
+}
+.role-row .role-label { color: var(--text-dim); }
+.role-row .role-val { font-variant-numeric: tabular-nums; font-weight: 600; }
+.role-row .role-text { color: var(--text); }

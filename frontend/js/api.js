@@ -111,6 +111,12 @@ export function normalizeObs(obs, semantics) {
     // ui.js can render passive keys by declared role (Task 5). Labels already
     // come through the per-semantics maps, so this is display-only.
     view: obs._view ?? {},
+    // raw value per _view key, so a NEW passive module (a key not hand-mapped
+    // above) survives into the normalized obs and renders generically -- the
+    // "zero new JS" property. Keys an existing panel already owns are excluded
+    // from generic rendering in ui.js, not here.
+    viewValues: Object.fromEntries(
+      Object.keys(obs._view ?? {}).map((k) => [k, obs[k]])),
   };
 }
 
