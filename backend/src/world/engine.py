@@ -11,11 +11,11 @@ from .emission import (analyst_briefing, news_bulletin, observe_counts,
                        observe_scorecard)
 from .contracts import Contract, contract_open, TERM_MENU, terms_for
 from .logistics import Books, resolve_week
+from .modules import REGISTRY
 from .state import SupplierState
 from .semantics import (COUNT_KEYS, ROUTE_DISPLAY, STATUS_DISPLAY,
                         SUPPLIER_DISPLAY)
 from .state import HiddenState
-from .transition import step_hidden, step_supplier
 
 HIDDEN_KEYS = {"event_state", "event_age", "disruption_type",
                "cape_local_congestion", "regime", "canal_blocked",
@@ -115,6 +115,23 @@ class World:
         self.books.contracts.append(
             self._new_contract(sup, start=self.week, terms=ca.get("terms")))
 
+    def _advance_modules(self):
+        """Advance every latent factor by iterating REGISTRY -- no literal
+        instance name. REGISTRY order IS the rng draw order, so the hidden
+        trajectory stays a function of the seed alone (exogeneity); actions
+        never consume rng. A module with drives=("",) is the singleton
+        world-state (self.hidden); a roster module advances self.suppliers[sid]
+        for each id its profile marks drifts=True."""
+        for m in REGISTRY:
+            if m.kernel is None:
+                continue
+            for sid in m.drives:
+                if sid == "":  # the singleton disruption state
+                    self.hidden = m.kernel(self.hidden, self.rng, self.cfg)
+                else:          # a drifting roster supplier
+                    self.suppliers[sid] = m.kernel(
+                        self.suppliers[sid], self.rng, self.cfg)
+
     def step(self, action: dict):
         """action = {"qty": 0|20|40, "supplier": "qualified"|"spot",
         "route": "suez"|"cape"} - supplier AND route required iff qty > 0
@@ -148,10 +165,7 @@ class World:
         self._briefing = None
 
         self.week += 1
-        self.hidden = step_hidden(self.hidden, self.rng, self.cfg)
-        # only spot drifts in R1; advance it, leave qualified/backup frozen.
-        self.suppliers["spot"] = step_supplier(
-            self.suppliers["spot"], self.rng, self.cfg)
+        self._advance_modules()
         arrived, costs = resolve_week(
             self.books, qty, supplier if qty else None,
             route if qty else None, self.hidden, self.suppliers["spot"],
