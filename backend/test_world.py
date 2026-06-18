@@ -488,6 +488,26 @@ def test_causal_oracle_within_bounds(causal):
         assert all(r["belief_support"] <= 3 for r in rows), seed
 
 
+def test_causal_oracle_value_pinned(causal):
+    """GOLDEN PIN: the benchmark anchor's ex-ante expected cost under the
+    optimal causal policy (WorldConfig() defaults). Captured empirically
+    2026-06-18. A refactor that changes world behavior moves this number,
+    and that is otherwise the one SILENT failure mode -- a wrong oracle
+    with no crash. Do NOT 'update' this literal without understanding why
+    it moved."""
+    assert causal.value() == 4251.9607875333395
+
+
+def test_causal_cost_pinned(causal):
+    """GOLDEN PIN: realized causal-oracle cost on fixed seeds (the live
+    engine played from observations only, each step cross-checked against
+    the DP). Locks end-to-end engine+oracle behavior, not just value()."""
+    expected = {1: 4280.0, 2: 4360.0, 3: 5700.0, 7: 4580.0, 11: 3940.0}
+    for seed, want in expected.items():
+        cost, _ = causal_play(seed, oracle=causal)
+        assert cost == want, seed
+
+
 # --- research surface (read-only API for the explainer UI) ---------------
 
 def test_xray_gating_and_content():
