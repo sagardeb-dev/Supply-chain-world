@@ -52,9 +52,20 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     for s in books.pipeline:
         surcharge += _advance(s, h, week, cfg)
 
-    arrived = sum(s.qty for s in books.pipeline if s.arrives_week == week)
-    books.pipeline = [s for s in books.pipeline if s.arrives_week != week]
-    books.inventory += arrived
+    # destination-port stage (rich world): when the port is blocked (congestion
+    # / customs hold), this week's arrivals are HELD a week and accrue demurrage.
+    # The default world has no port effect -> the original arrival logic, exact.
+    landing = [s for s in books.pipeline if s.arrives_week == week]
+    demurrage = 0.0
+    if eff.get("port_blocked") and landing:
+        for s in landing:
+            s.arrives_week = week + 1
+        demurrage = eff.get("demurrage_rate", 0.0) * sum(s.qty for s in landing)
+        arrived = 0
+    else:
+        arrived = sum(s.qty for s in landing)
+        books.pipeline = [s for s in books.pipeline if s.arrives_week != week]
+        books.inventory += arrived
 
     # weekly demand from the demand module (rich world), else the constant.
     dem = eff.get("demand", cfg.weekly_demand)
@@ -75,4 +86,6 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
         "stockout": cfg.stockout_cost * shortfall,
         "couple": couple,
     }
+    if demurrage:
+        costs["demurrage"] = demurrage  # port held arrivals (rich world only)
     return arrived, costs

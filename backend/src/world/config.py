@@ -87,6 +87,20 @@ class WorldConfig:
     fr_noise_sd: float = 0.15              # sd of the realized rate multiplier
     fr_outlook_sd: float = 0.25            # sd of the forward outlook (noisier)
 
+    # --- port/customs semi-Markov kernel (latent module #5, RICH worlds only) ---
+    # Unused unless the port module is in the registry. Destination-stage dwell:
+    # congestion backlogs run weeks; customs holds are short (~1 wk).
+    port_build_onset: float = 0.06         # clear -> building
+    port_customs_onset: float = 0.04       # clear -> customs_hold
+    port_congest_onset: float = 0.30       # building -> congested
+    port_build_clear: float = 0.30         # building -> clear
+    port_congest_persist: float = 0.85     # congestion is sticky (~5 wks)
+    port_congest_max: int = 8              # congestion caps at ~8 wks
+    port_customs_persist: float = 0.20     # customs hold is short (~1 wk)
+    port_wait_noise_sd: float = 2.0        # sd of the realized berth-wait days
+    port_outlook_sd: float = 3.0           # sd of the forward outlook (noisier)
+    port_demurrage_rate: float = 2.0       # demurrage cost per held unit per week
+
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam
     suez_chokepoint_offset: int = 2       # canal transit ~day 20 of 28

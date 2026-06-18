@@ -1514,11 +1514,12 @@ def test_default_world_demand_inert():
 # --- module 4: freight (noisy spot rate; cost-multiplier effect; RICH only) -
 
 def test_freight_in_rich_registry_after_demand():
-    """Freight appends LAST in RICH (after disruption/supplier/demand), so its
-    rng draws come last and the disruption golden is unperturbed."""
+    """RICH appends factors in a fixed order after the base two; later factors
+    append after freight, so each new factor's rng draws come last and the
+    disruption golden is unperturbed."""
     from src.world.registry import REGISTRY, RICH
     assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
-    assert tuple(m.id for m in RICH) == ("disruption", "supplier", "demand", "freight")
+    assert tuple(m.id for m in RICH)[:4] == ("disruption", "supplier", "demand", "freight")
 
 
 def test_freight_band_gri_onset_ambiguity():
@@ -1588,3 +1589,82 @@ def test_rich_world_freight_deterministic_and_varies():
             w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
             bands.add(w.module_states["freight"].band)
     assert {"jump", "high", "peak", "low"} <= bands
+
+
+# --- module 5: port/customs (lead-time + demurrage effect; RICH only) ------
+
+def test_port_in_rich_registry_after_freight():
+    from src.world.registry import REGISTRY, RICH
+    assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
+    assert tuple(m.id for m in RICH)[-1] == "port"
+
+
+def test_port_band_onset_ambiguity():
+    """congested & customs_hold ONSET share the 'slow' band (mirrors crash); at
+    age>=1 a persisting hold/backlog reads 'congested'."""
+    from src.world.modules.port import PortState
+    c0, h0 = PortState("congested", 0), PortState("customs_hold", 0)
+    assert c0.band == h0.band == "slow"
+    assert c0.mean == h0.mean
+    assert PortState("congested", 1).band == "congested"
+    assert PortState("clear").band == "clear" and PortState("building").band == "building"
+
+
+def test_port_emit_no_leak():
+    from src.world.modules.port import PortState, emit
+    p = PortState("congested", 2, berth_wait=17, wait_outlook=15)
+    assert emit(p, CFG) == {"berth_wait": 17, "wait_outlook": 15}
+    assert not ({"regime", "regime_age", "band", "blocked"} & set(emit(p, CFG)))
+
+
+def test_port_blocked_holds_arrivals_and_charges_demurrage():
+    """A blocked port holds this week's arrivals +1 week and charges demurrage;
+    a clear port lands them (and the default world, no effect, lands them)."""
+    from src.world.substrate.books import Books, Shipment
+    def due():  # a ship due to arrive at week 5
+        b = Books(80)
+        b.pipeline = [Shipment(20, "suez", 2, "qualified", arrives_week=5)]
+        return b
+    clear_b = due()
+    arrived, costs = resolve_week(clear_b, 0, None, None, HiddenState(),
+                                  SupplierState(), 5, CFG, effects={})
+    assert arrived == 20 and "demurrage" not in costs and not clear_b.pipeline
+    block_b = due()
+    arrived, costs = resolve_week(
+        block_b, 0, None, None, HiddenState(), SupplierState(), 5, CFG,
+        effects={"port_blocked": True, "demurrage_rate": CFG.port_demurrage_rate})
+    assert arrived == 0
+    assert costs["demurrage"] == CFG.port_demurrage_rate * 20
+    assert block_b.pipeline[0].arrives_week == 6   # held a week
+
+
+def test_port_kernel_congestion_capped_customs_short():
+    import random
+    from src.world.modules.port import PortState, step_port
+    rng = random.Random(0)
+    s, weeks = PortState("congested", 0), 0
+    while s.regime == "congested" and weeks < 50:
+        s = step_port(s, rng, CFG); weeks += 1
+    assert weeks <= CFG.port_congest_max
+    # a customs hold is short: usually clears within a couple of weeks
+    cleared = sum(step_port(PortState("customs_hold"), rng, CFG).regime == "clear"
+                  for _ in range(400))
+    assert cleared / 400 > 0.6
+
+
+def test_rich_world_port_deterministic_and_demurrage_occurs():
+    from src.world.registry import RICH
+    def run(seed):
+        w = World(registry=RICH); w.reset(seed); rows = []
+        while not w.done:
+            o, c, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+            rows.append((o["berth_wait"], round(c, 4)))
+        return rows
+    assert run(3) == run(3)
+    charged = 0
+    for seed in range(40):
+        w = World(registry=RICH); w.reset(seed)
+        while not w.done:
+            o, _, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+            charged += "demurrage" in o["cost_breakdown"]
+    assert charged > 0
