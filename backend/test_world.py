@@ -1415,10 +1415,11 @@ def test_view_labels_never_leak_real_names_in_anon():
 
 def test_demand_only_in_rich_registry():
     """The default world is the pinned 2-factor world; demand appears only in
-    RICH, and appended LAST -- so it cannot perturb the disruption golden."""
+    RICH (which also carries later factors) -- never in the default registry."""
     from src.world.registry import REGISTRY, RICH
     assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
-    assert tuple(m.id for m in RICH) == ("disruption", "supplier", "demand")
+    assert "demand" in {m.id for m in RICH}
+    assert "demand" not in {m.id for m in REGISTRY}
 
 
 def test_demand_band_onset_ambiguity():
@@ -1508,3 +1509,82 @@ def test_default_world_demand_inert():
     w = World(); obs = w.reset(3)
     assert "demand" not in w.module_states
     assert "pos_units" not in obs
+
+
+# --- module 4: freight (noisy spot rate; cost-multiplier effect; RICH only) -
+
+def test_freight_in_rich_registry_after_demand():
+    """Freight appends LAST in RICH (after disruption/supplier/demand), so its
+    rng draws come last and the disruption golden is unperturbed."""
+    from src.world.registry import REGISTRY, RICH
+    assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
+    assert tuple(m.id for m in RICH) == ("disruption", "supplier", "demand", "freight")
+
+
+def test_freight_band_gri_onset_ambiguity():
+    """GRI-week ambiguity (mirrors disruption 'crash'): tightening & spike ONSET
+    share the 'jump' mean; at age>=1 they separate (high plateau vs peak climb)."""
+    from src.world.modules.freight import FreightState, FREIGHT_MEANS
+    t0, s0 = FreightState("tightening", 0), FreightState("spike", 0)
+    assert t0.band == s0.band == "jump"
+    assert t0.mean == s0.mean == FREIGHT_MEANS["jump"]
+    t1, s1 = FreightState("tightening", 1), FreightState("spike", 1)
+    assert (t1.band, s1.band) == ("high", "peak")
+    assert t1.mean != s1.mean
+    assert FreightState("slack").band == "low" and FreightState("normal").band == "mid"
+
+
+def test_freight_emit_index_outlook_no_leak():
+    from src.world.modules.freight import FreightState, emit
+    f = FreightState("spike", 2, realized_mult=4.2, outlook=3.7)
+    assert emit(f, CFG) == {"freight_index": 420, "freight_outlook": 370}
+    assert not ({"regime", "regime_age", "band", "realized_mult"} & set(emit(f, CFG)))
+
+
+def test_freight_effect_scales_route_cost():
+    """The freight effect multiplies the route base rate in resolve_week; a spike
+    multiplier costs strictly more than normal for the same order."""
+    from src.world.substrate.books import Books
+    base = resolve_week(Books(80), 20, "qualified", "suez", HiddenState(),
+                        SupplierState(), 1, CFG, effects={"freight_mult": 1.0})[1]
+    spike = resolve_week(Books(80), 20, "qualified", "suez", HiddenState(),
+                         SupplierState(), 1, CFG, effects={"freight_mult": 4.0})[1]
+    assert spike["shipping"] > base["shipping"]
+    # default world (no effects) == freight_mult 1.0 (byte-identical)
+    none = resolve_week(Books(80), 20, "qualified", "suez", HiddenState(),
+                        SupplierState(), 1, CFG)[1]
+    assert none["shipping"] == base["shipping"]
+
+
+def test_freight_kernel_spike_decays_slack_sticky():
+    import random
+    from src.world.modules.freight import FreightState, step_freight
+    rng = random.Random(0)
+    # spike is age-capped: it cannot persist past fr_spike_max
+    s = FreightState("spike", 0)
+    weeks = 0
+    while s.regime == "spike" and weeks < 50:
+        s = step_freight(s, rng, CFG); weeks += 1
+    assert weeks <= CFG.fr_spike_max
+    # slack is sticky
+    persists = sum(step_freight(FreightState("slack"), rng, CFG).regime == "slack"
+                   for _ in range(400))
+    assert persists / 400 > 0.85
+
+
+def test_rich_world_freight_deterministic_and_varies():
+    from src.world.registry import RICH
+    def run(seed):
+        w = World(registry=RICH); w.reset(seed); rows = []
+        while not w.done:
+            o, c, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+            rows.append((o["freight_index"], o["freight_outlook"], round(c, 4)))
+        return rows
+    assert run(3) == run(3)
+    bands = set()
+    for seed in range(80):
+        w = World(registry=RICH); w.reset(seed)
+        while not w.done:
+            w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+            bands.add(w.module_states["freight"].band)
+    assert {"jump", "high", "peak", "low"} <= bands

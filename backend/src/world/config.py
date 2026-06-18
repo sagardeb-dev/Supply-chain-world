@@ -73,6 +73,20 @@ class WorldConfig:
     demand_noise_sd: float = 4.0           # sd of the realized weekly POS
     demand_forecast_sd: float = 6.0        # sd of the forward forecast (noisier)
 
+    # --- freight-rate semi-Markov kernel (latent module #4, RICH worlds only) ---
+    # Unused unless the freight module is in the registry. Grounded in FBX/SCFI
+    # spot dynamics: tightening via carrier discipline/GRIs, spike via shocks.
+    fr_tighten_onset: float = 0.06         # normal -> tightening
+    fr_slack_onset: float = 0.04           # normal -> slack
+    fr_spike_onset: float = 0.18           # tightening -> spike (shock escalation)
+    fr_tighten_recover: float = 0.25       # tightening -> normal (GRI fades)
+    fr_tighten_max: int = 6                # tightening caps at ~6 wks
+    fr_spike_persist: float = 0.80         # spike decays (mean ~5 wks)
+    fr_spike_max: int = 6                  # spike caps at ~6 wks
+    fr_slack_persist: float = 0.93         # slack is sticky (overcapacity lingers)
+    fr_noise_sd: float = 0.15              # sd of the realized rate multiplier
+    fr_outlook_sd: float = 0.25            # sd of the forward outlook (noisier)
+
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam
     suez_chokepoint_offset: int = 2       # canal transit ~day 20 of 28

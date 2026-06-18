@@ -30,6 +30,7 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     test_resolve_rel_mirrors_resolve_week + the causal_play cross-check. Touch
     cost arithmetic here (including the crisis_backorder coupling) and you MUST
     mirror it in resolve_rel."""
+    eff = effects or {}
     shipping = 0.0
     shortfall_units = 0
     if qty:
@@ -37,7 +38,10 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
         shipped = round(qty * frac)
         shortfall_units = qty - shipped
         if shipped:
-            base = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
+            # freight regime (rich world) scales the route base rate; default 1.0
+            fmult = eff.get("freight_mult", 1.0)
+            base = ((cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost)
+                    * fmult)
             # unit economics (A8.1): spot undercuts the lane, qualified adds a premium
             unit = (base - cfg.spot_unit_discount if supplier == "spot"
                     else base + cfg.qualified_premium)
@@ -52,10 +56,7 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     books.pipeline = [s for s in books.pipeline if s.arrives_week != week]
     books.inventory += arrived
 
-    # substrate effects from the active modules (module-agnostic: named numbers,
-    # never the modules). demand replaces the constant weekly_demand (rich world);
-    # default world yields {} -> the constants. freight_mult etc. join here later.
-    eff = effects or {}
+    # weekly demand from the demand module (rich world), else the constant.
     dem = eff.get("demand", cfg.weekly_demand)
     served = min(books.inventory, dem)
     shortfall = dem - served
