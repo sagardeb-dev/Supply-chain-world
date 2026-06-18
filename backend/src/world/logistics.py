@@ -94,7 +94,12 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     voyage stage is untouched: stage 1 (sourcing) output feeds stage 2.
 
     ponytail: unit economics (spot discount / qualified premium) and the
-    disruption cost coupling land in T5; this task only wires the shortfall."""
+    disruption cost coupling land in T5; this task only wires the shortfall.
+
+    ponytail: PINNED MIRROR of causal_oracle.resolve_rel (the DP's relative-
+    pipeline twin). Do NOT dedup -- different state reps; kept in lockstep by
+    test_resolve_rel_mirrors_resolve_week + the causal_play cross-check. Touch
+    cost arithmetic here and you MUST mirror it in resolve_rel."""
     shipping = 0.0
     shortfall_units = 0
     if qty:

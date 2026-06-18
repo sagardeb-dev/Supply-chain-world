@@ -3,6 +3,50 @@
 Design decisions for the supply-chain POMDP world. Each entry records what
 changed, why, and the evidence. Code follows this file, never the reverse.
 
+## 2026-06-18 — Module-contract refactor (structural; behavior byte-identical)
+
+### Problem
+
+The 2026-06-17 "module recipe" (state / kernel / emission / actions slots) was a
+CONVENTION followed by hand: the engine still wired each factor by literal instance
+name (`self.suppliers["spot"] = step_supplier(...)`, `sid == "spot"/"qualified"/
+"backup"` branches) and the frontend hand-rendered every obs field. The recipe was
+real but unenforced, so each new factor still meant editing the engine and the JS.
+
+### Decision
+
+Make the recipe EXECUTABLE: a frozen `Module` record + a `REGISTRY` tuple
+(`modules.py`). The engine iterates the registry to advance kernels and assemble
+obs — no instance name appears literally. Two budgets are declared on each record:
+`kind` (oracle cost) and `view` (frontend display role). The `view` manifest rides
+on a reserved `_view` obs key (raw value keys unchanged; oracle readers and the
+leak-guard untouched; anon labels routed through the per-semantics maps), and the
+frontend renders any PASSIVE role generically — a new passive latent module appears
+with zero new JS. Per-supplier economics moved into the `SUPPLIERS` profile (cfg
+stays the single source of truth for the numbers logistics/oracle also read).
+
+### Decision: the resolve_rel / resolve_week mirror is KEPT, not deduped
+
+`causal_oracle.resolve_rel` and `logistics.resolve_week` are an exact mirror pair on
+two different state representations (the DP's canonical tuple vs real Books/Shipment).
+Deduping would de-optimize the DP or leak Books mutability into it (the wrong-
+abstraction trap). Both now carry a `# ponytail: PINNED MIRROR` note; the pair is held
+in lockstep by `test_resolve_rel_mirrors_resolve_week` + the per-step causal_play
+cross-check.
+
+### Evidence
+
+- Oracle anchor `CausalOracle(WorldConfig()).value()` == 4251.9607875333395, identical
+  before and after the structural core (Tasks 1-3). Frontend tasks never touch the
+  oracle path.
+- New `test_world.py` pins: registry covers exactly the two factors (the iid cape coin
+  is subsumed inside the disruption module, NOT a third module); emit byte-identical in
+  real AND anon; the economics golden incl. the backup row; `_view` present, leak-
+  skipped, and anon-label-leak-free. Full structural change is test-green.
+- Frontend "zero new JS" demonstrated live (an injected forecast_error scalar renders,
+  then reverted); all scorecard action marks verified intact.
+- Full record: claude-mds/sequence-of-changes/005-module-contract-refactor.md.
+
 ## 2026-06-17 — Supplier roster, contracts, and the three emergence levers
 
 ### Problem

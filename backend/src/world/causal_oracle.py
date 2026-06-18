@@ -111,7 +111,15 @@ def resolve_rel(pipe: tuple, inventory: int, qty: int, route,
                 core: tuple, cape_local: bool, cfg: WorldConfig):
     """One week of logistics on the relative encoding — the exact mirror
     of logistics.resolve_week (pinned by test). Returns
-    (new_pipe, new_inventory, arrived, step_cost)."""
+    (new_pipe, new_inventory, arrived, step_cost).
+
+    ponytail: PINNED MIRROR of logistics.resolve_week. Do NOT dedup the two.
+    They operate on different state reps -- this one on the canonical
+    (e0,e1,queued,arrs) tuple that makes the DP tractable, resolve_week on real
+    Books/Shipment objects. A shared abstraction would de-optimize the DP or
+    leak Books mutability into it (the wrong-abstraction trap). The pair is
+    held in lockstep by test_resolve_rel_mirrors_resolve_week + the per-step
+    causal_play cross-check; change one, change the other, keep both green."""
     e0, e1, queued, (a1, a2, a3) = pipe
     s, _age, dtype = core
     blocked = s == "disruption"
