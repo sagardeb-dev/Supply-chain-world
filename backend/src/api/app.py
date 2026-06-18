@@ -7,6 +7,12 @@ ever sees canonical names."""
 
 import threading
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# load backend/.env so OPENROUTER_API_KEY (read in agent/factory.py) is present
+# before any agent code runs. Searches cwd upward; uvicorn runs from backend/.
+load_dotenv()
 from typing import Literal
 from uuid import uuid4
 
