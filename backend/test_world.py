@@ -1243,3 +1243,65 @@ def test_hard_gap_defunct_spot_leaves_you_stuck():
     # and even a renew cannot make a dead supplier sourceable this week
     w.suppliers["spot"] = SupplierState(rel_state="defunct")
     assert "spot" not in w._contracted_suppliers()
+
+
+# --- module contract: the registry declaration (structural refactor) -------
+
+def test_registry_covers_exactly_the_two_factors():
+    """Two latent modules, no more. The iid cape-local coin is a THIRD
+    stochastic root but it lives INSIDE the disruption module's emission
+    (observe_counts), not as its own module -- 'two modules' != 'two
+    stochastic roots'. Pin the count and the ids so a stray module can't
+    sneak in."""
+    from src.world.modules import REGISTRY
+    assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
+    # order is load-bearing (rng draw order = exogeneity); pin it explicitly
+    assert REGISTRY[0].kernel is step_hidden
+    assert REGISTRY[1].kernel is step_supplier
+    # both are noiseless latent factors
+    assert all(m.kind == "latent-factor" for m in REGISTRY)
+
+
+def test_supplier_module_drives_only_drifting_roster_ids():
+    """The supplier module advances exactly the roster ids whose profile
+    sets drifts=True (only spot in R1), read from SUPPLIERS -- no literal
+    'spot' in the module record."""
+    from src.world.modules import SUPPLIER
+    from src.world.config import SUPPLIERS
+    assert SUPPLIER.drives == tuple(sid for sid, p in SUPPLIERS.items()
+                                    if p["drifts"])
+    assert SUPPLIER.drives == ("spot",)
+
+
+def test_disruption_emit_byte_identical_to_handbuilt_obs():
+    """The disruption module's emit reproduces the count keys (renamed
+    through the per-semantics map) plus the bulletin, byte-for-byte, in
+    BOTH semantics modes -- so swapping _build_obs to call emit cannot move
+    a single byte."""
+    from src.world.modules import DISRUPTION
+    from src.world.semantics import COUNT_KEYS
+    states = [CALM, HiddenState("watch"), SHORT, LONG,
+              HiddenState("disruption", 1, "short"),
+              HiddenState("disruption", 1, "long"), RECOV,
+              HiddenState("false_alarm"),
+              HiddenState(cape_local_congestion=True)]
+    for mode in ("real", "anon"):
+        mcfg = WorldConfig(semantics=mode)
+        keymap = COUNT_KEYS[mode]
+        for h in states:
+            hand = {keymap[k]: v
+                    for k, v in observe_counts(h, mcfg).items()}
+            hand["bulletin"] = news_bulletin(h, mcfg)
+            assert DISRUPTION.emit(h, mcfg) == hand, (mode, h)
+
+
+def test_supplier_emit_byte_identical_to_scorecard():
+    """The supplier module's emit IS observe_scorecard -- byte-for-byte over
+    the whole roster, in both semantics modes."""
+    from src.world.modules import SUPPLIER
+    for mode in ("real", "anon"):
+        mcfg = WorldConfig(semantics=mode)
+        for state in ("reliable", "wobbling", "degraded", "defunct"):
+            rost = roster(rel_state=state)
+            assert SUPPLIER.emit(rost, mcfg) == observe_scorecard(rost, mcfg), \
+                (mode, state)
