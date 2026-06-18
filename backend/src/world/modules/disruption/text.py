@@ -1,14 +1,14 @@
-"""Agent-facing text and label layer, in two parallel vocabularies.
-"real" carries genuine referents (Suez, Red Sea, groundings, attacks) -
-the domain-knowledge channel under test in the semantics ablation.
-"anon" is structurally identical with referents stripped.
+"""The disruption module's agent-facing text, in two parallel vocabularies.
+"real" carries genuine referents (Suez, Red Sea, groundings, attacks) - the
+domain-knowledge channel under test in the semantics ablation. "anon" is
+structurally identical with referents stripped.
 
 Rules (V1_CHANGE_LOG 2026-06-11(b)):
 R1 - bulletins are a pure function of HiddenState.regime, so the shared
-     "crash" regime makes false_alarm and week-0 of either disruption
-     type byte-identical, mirroring the count ambiguity exactly.
-R2 - no duration or probability language anywhere: the duration prior
-     IS the domain knowledge being measured.
+     "crash" regime makes false_alarm and week-0 of either disruption type
+     byte-identical, mirroring the count ambiguity exactly.
+R2 - no duration or probability language anywhere: the duration prior IS
+     the domain knowledge being measured.
 R3 - both modes carry identical information (same revelation timing).
 """
 
@@ -84,22 +84,10 @@ BRIEFINGS = {
     },
 }
 
+# The count-key rename for the anon ablation (this module's own keys).
 COUNT_KEYS = {
     "real": {"suez_count": "suez_count", "bab_count": "bab_count",
              "cape_count": "cape_count"},
     "anon": {"suez_count": "waterway1_count", "bab_count": "strait_count",
              "cape_count": "waterway2_count"},
-}
-
-# Supplier id + scorecard-band labels (factor 2). Same real/anon ablation
-# boundary as the routes: identical information, referents stripped in anon.
-SUPPLIER_DISPLAY = {
-    "real": {"qualified": "qualified", "spot": "spot", "backup": "backup"},
-    "anon": {"qualified": "source_a", "spot": "source_b", "backup": "source_c"},
-}
-SUPPLIER_PARSE = {mode: {v: k for k, v in d.items()}
-                  for mode, d in SUPPLIER_DISPLAY.items()}
-SUPPLIER_BAND_DISPLAY = {
-    "real": {"ontime": "ontime", "slipping": "slipping", "failing": "failing"},
-    "anon": {"ontime": "band_0", "slipping": "band_1", "failing": "band_2"},
 }

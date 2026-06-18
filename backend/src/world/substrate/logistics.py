@@ -9,7 +9,8 @@ This file only calls it, keeping the two-factor read in its one auditable home.
 
 from ..config import WorldConfig
 from ..couplings import crisis_backorder
-from ..state import HiddenState, SupplierState
+from ..modules.disruption import HiddenState
+from ..modules.supplier import SupplierState
 from .books import Books, Shipment, _advance
 
 

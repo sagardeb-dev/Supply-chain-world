@@ -70,4 +70,3 @@ def terms_for(menu_key: str, supplier: str, start: int, cfg) -> dict:
         "otif_floor": m["otif_floor"],
         "break_fee": cfg.contract_break_fee * m["break_fee_mult"],
     }
-

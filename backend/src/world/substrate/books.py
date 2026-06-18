@@ -11,7 +11,7 @@ its congestion point at dispatch+cape_chokepoint_offset."""
 from dataclasses import dataclass
 
 from ..config import WorldConfig
-from ..state import HiddenState
+from ..modules.disruption import HiddenState
 
 
 @dataclass

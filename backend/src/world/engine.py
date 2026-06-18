@@ -6,15 +6,14 @@ only in _build_obs (R4)."""
 
 import random
 
-from .config import SUPPLIERS, WorldConfig
-from .emission import analyst_briefing
-from .contracts import Contract, contract_open, TERM_MENU, terms_for
+from .config import WorldConfig
+from .modules.disruption import HiddenState, analyst_briefing
+from .modules.supplier import (Contract, SUPPLIER_DISPLAY, SUPPLIERS,
+                               SupplierState, TERM_MENU, contract_open,
+                               terms_for)
 from .substrate import Books, resolve_week
-from .modules import REGISTRY
-from .state import SupplierState
 from .substrate.semantics import ROUTE_DISPLAY, STATUS_DISPLAY
-from .semantics import SUPPLIER_DISPLAY
-from .state import HiddenState
+from .registry import REGISTRY
 
 HIDDEN_KEYS = {"event_state", "event_age", "disruption_type",
                "cape_local_congestion", "regime", "canal_blocked",

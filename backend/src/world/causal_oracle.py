@@ -30,9 +30,9 @@ V1_CHANGE_LOG.md 2026-06-11 (c) records the design decisions.
 
 from functools import lru_cache
 
-from .config import REGIME_COUNTS, WorldConfig
+from .config import WorldConfig
 from .engine import World
-from .semantics import BRIEFINGS
+from .modules.disruption import BRIEFINGS, REGIME_COUNTS
 
 # Hidden core = (event_state, event_age, disruption_type). The iid
 # cape_local coin never persists, so it is integrated out at the resolve

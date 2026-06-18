@@ -10,7 +10,7 @@ from functools import lru_cache
 
 from .config import WorldConfig
 from .engine import World
-from .state import HiddenState
+from .modules.disruption import HiddenState
 
 
 def hidden_trajectory(seed: int, cfg: WorldConfig) -> list[HiddenState]:

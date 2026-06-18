@@ -15,18 +15,18 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.world import World, WorldConfig
-from src.world.emission import (analyst_briefing, news_bulletin,
-                               observe_counts, observe_scorecard)
+from src.world.modules.disruption import (BULLETINS, HiddenState,
+                                          analyst_briefing, news_bulletin,
+                                          observe_counts, step_hidden)
+from src.world.modules.supplier import (Contract, SupplierState, TERM_MENU,
+                                        contract_open, observe_scorecard,
+                                        step_supplier, terms_for)
 from src.world.engine import HIDDEN_KEYS
 from src.world.substrate import Books, resolve_week
-from src.world.contracts import Contract, contract_open, TERM_MENU, terms_for
 from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
-from src.world.semantics import BULLETINS
-from src.world.state import HiddenState, SupplierState
 from src.world.causal_oracle import (EMPTY_PIPE, CausalOracle, canonical,
                                      causal_play, resolve_rel,
                                      transition_dist)
-from src.world.transition import step_hidden, step_supplier
 
 
 CFG = WorldConfig()
@@ -152,7 +152,7 @@ def test_no_duration_language_in_any_text():
     banned = ("week", "month", "day", "year", "soon", "brief ", "extended",
               "short", "long", "prolonged", "temporar", "indefinite",
               "likely", "probab", "%")
-    from src.world.semantics import BRIEFINGS
+    from src.world.modules.disruption import BRIEFINGS
     for table in (BULLETINS, BRIEFINGS):
         for mode in table:
             for key, text in table[mode].items():
@@ -907,7 +907,7 @@ def test_scorecard_backup_present_and_mid_tier():
     sc = scorecard()
     b = _row(sc, "backup")
     assert b["otif"] == 95
-    from src.world.config import SUPPLIERS as _SUP
+    from src.world.modules.supplier import SUPPLIERS as _SUP
     assert b["onboard_lead"] == _SUP["backup"]["onboard_weeks"]
     # backup is mid-priced: a small premium, not spot's discount
     assert b["unit_delta"] == CFG.backup_unit_delta
@@ -1274,7 +1274,7 @@ def test_registry_covers_exactly_the_two_factors():
     (observe_counts), not as its own module -- 'two modules' != 'two
     stochastic roots'. Pin the count and the ids so a stray module can't
     sneak in."""
-    from src.world.modules import REGISTRY
+    from src.world.registry import REGISTRY
     assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
     # order is load-bearing (rng draw order = exogeneity); pin it explicitly
     assert REGISTRY[0].kernel is step_hidden
@@ -1287,8 +1287,8 @@ def test_supplier_module_drives_only_drifting_roster_ids():
     """The supplier module advances exactly the roster ids whose profile
     sets drifts=True (only spot in R1), read from SUPPLIERS -- no literal
     'spot' in the module record."""
-    from src.world.modules import SUPPLIER
-    from src.world.config import SUPPLIERS
+    from src.world.registry import SUPPLIER
+    from src.world.modules.supplier import SUPPLIERS
     assert SUPPLIER.drives == tuple(sid for sid, p in SUPPLIERS.items()
                                     if p["drifts"])
     assert SUPPLIER.drives == ("spot",)
@@ -1299,8 +1299,8 @@ def test_disruption_emit_byte_identical_to_handbuilt_obs():
     through the per-semantics map) plus the bulletin, byte-for-byte, in
     BOTH semantics modes -- so swapping _build_obs to call emit cannot move
     a single byte."""
-    from src.world.modules import DISRUPTION
-    from src.world.semantics import COUNT_KEYS
+    from src.world.registry import DISRUPTION
+    from src.world.modules.disruption import COUNT_KEYS
     states = [CALM, HiddenState("watch"), SHORT, LONG,
               HiddenState("disruption", 1, "short"),
               HiddenState("disruption", 1, "long"), RECOV,
@@ -1319,7 +1319,7 @@ def test_disruption_emit_byte_identical_to_handbuilt_obs():
 def test_supplier_emit_byte_identical_to_scorecard():
     """The supplier module's emit IS observe_scorecard -- byte-for-byte over
     the whole roster, in both semantics modes."""
-    from src.world.modules import SUPPLIER
+    from src.world.registry import SUPPLIER
     for mode in ("real", "anon"):
         mcfg = WorldConfig(semantics=mode)
         for state in ("reliable", "wobbling", "degraded", "defunct"):
@@ -1347,7 +1347,7 @@ def test_scorecard_economics_golden_all_three_rows():
     assert "unit_discount" not in rows["backup"]
     assert "unit_premium" not in rows["backup"]
     # frozen OTIF/lead/onboard now live in the SUPPLIERS profile, not cfg
-    from src.world.config import SUPPLIERS
+    from src.world.modules.supplier import SUPPLIERS
     assert rows["backup"]["otif"] == SUPPLIERS["backup"]["otif"] == 95
     assert rows["backup"]["lead_days"] == SUPPLIERS["backup"]["lead"] == 16
     assert rows["backup"]["onboard_lead"] == SUPPLIERS["backup"]["onboard_weeks"] == 1
