@@ -24,9 +24,8 @@ from src.world.modules.supplier import (Contract, SupplierState, TERM_MENU,
 from src.world.engine import HIDDEN_KEYS
 from src.world.substrate import Books, resolve_week
 from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
-from src.world.causal_oracle import (EMPTY_PIPE, CausalOracle, canonical,
-                                     causal_play, resolve_rel,
-                                     transition_dist)
+from src.world.oracle import (EMPTY_PIPE, CausalOracle, canonical,
+                              causal_play, resolve_rel, transition_dist)
 
 
 CFG = WorldConfig()

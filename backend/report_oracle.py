@@ -10,7 +10,7 @@ Regret decomposition per seed:
   causal - clairvoyant = luck premium (information was NOT available)
 """
 
-from src.world.causal_oracle import CausalOracle, causal_play
+from src.world.oracle import CausalOracle, causal_play
 from src.world.config import WorldConfig
 from src.world.engine import World
 from src.world.oracle import oracle_plan
