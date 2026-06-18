@@ -1596,7 +1596,8 @@ def test_rich_world_freight_deterministic_and_varies():
 def test_port_in_rich_registry_after_freight():
     from src.world.registry import REGISTRY, RICH
     assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
-    assert tuple(m.id for m in RICH)[-1] == "port"
+    ids = tuple(m.id for m in RICH)
+    assert "port" in ids and ids.index("port") > ids.index("freight")
 
 
 def test_port_band_onset_ambiguity():
@@ -1668,3 +1669,76 @@ def test_rich_world_port_deterministic_and_demurrage_occurs():
             o, _, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
             charged += "demurrage" in o["cost_breakdown"]
     assert charged > 0
+
+
+# --- module 6: quality (NOISY discrete AQL emission; RICH only) ------------
+
+def test_quality_completes_the_six_factor_world():
+    from src.world.registry import REGISTRY, RICH
+    assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
+    assert tuple(m.id for m in RICH) == ("disruption", "supplier", "demand",
+                                         "freight", "port", "quality")
+
+
+def test_quality_aql_sample_is_noisy():
+    """The distinctive feature: the observation is a NOISY discrete AQL sample,
+    so no single reading identifies the regime (the belief never collapses)."""
+    import random
+    from src.world.modules.quality.factor import _sample_band
+    rng = random.Random(0)
+    ic = [_sample_band("in_control", rng) for _ in range(1000)]
+    assert ic.count("accept") > 800 and "marginal" in ic    # noisy, mostly accept
+    oc = [_sample_band("out_of_control", rng) for _ in range(1000)]
+    assert oc.count("reject") > 600                          # mostly reject
+    dr = [_sample_band("drifting", rng) for _ in range(1000)]
+    assert len(set(dr)) == 3                                 # drifting straddles
+
+
+def test_quality_emit_no_leak():
+    from src.world.modules.quality import QualityState, emit
+    q = QualityState("out_of_control", 3, sample_band="reject")
+    assert emit(q, CFG) == {"aql_result": "reject"}
+    assert not ({"regime", "regime_age"} & set(emit(q, CFG)))
+
+
+def test_quality_defect_reduces_usable_arrivals_and_charges_rework():
+    """Defective arrivals don't stock (effective shortfall) and incur rework;
+    the default world (no effect) stocks everything, no rework key."""
+    from src.world.substrate.books import Books, Shipment
+    def due():
+        b = Books(80)
+        b.pipeline = [Shipment(40, "suez", 2, "qualified", arrives_week=5)]
+        return b
+    clean = due()
+    arrived, costs = resolve_week(clean, 0, None, None, HiddenState(),
+                                  SupplierState(), 5, CFG, effects={})
+    assert arrived == 40 and "rework" not in costs
+    defq = due()
+    arrived, costs = resolve_week(
+        defq, 0, None, None, HiddenState(), SupplierState(), 5, CFG,
+        effects={"defect_fraction": 0.10, "rework_rate": CFG.quality_rework_cost})
+    assert arrived == 36                                   # 4 of 40 defective
+    assert costs["rework"] == CFG.quality_rework_cost * 4
+
+
+def test_quality_drift_hazard_rises_with_age():
+    """Semi-Markov 'gradual then sudden': drifting->out hazard rises with age."""
+    import random
+    from src.world.modules.quality import QualityState, step_quality
+    rng = random.Random(0)
+    def out_rate(age, n=3000):
+        return sum(step_quality(QualityState("drifting", age), rng, CFG).regime
+                   == "out_of_control" for _ in range(n)) / n
+    assert out_rate(0) < out_rate(5)
+
+
+def test_rich_six_factor_world_deterministic():
+    from src.world.registry import RICH
+    def run(seed):
+        w = World(registry=RICH); w.reset(seed); rows = []
+        while not w.done:
+            o, c, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+            rows.append((o["aql_result"], o["pos_units"], o["freight_index"],
+                         o["berth_wait"], round(c, 4)))
+        return rows
+    assert run(5) == run(5)

@@ -57,15 +57,21 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     # The default world has no port effect -> the original arrival logic, exact.
     landing = [s for s in books.pipeline if s.arrives_week == week]
     demurrage = 0.0
+    defective = 0
     if eff.get("port_blocked") and landing:
         for s in landing:
             s.arrives_week = week + 1
         demurrage = eff.get("demurrage_rate", 0.0) * sum(s.qty for s in landing)
         arrived = 0
     else:
-        arrived = sum(s.qty for s in landing)
+        gross = sum(s.qty for s in landing)
+        # quality (rich world): a defective fraction of arrivals don't stock
+        # (effective shortfall) and incur rework; default world -> fraction 0.
+        defective = round(gross * eff.get("defect_fraction", 0.0))
+        arrived = gross - defective
         books.pipeline = [s for s in books.pipeline if s.arrives_week != week]
         books.inventory += arrived
+    rework = eff.get("rework_rate", 0.0) * defective
 
     # weekly demand from the demand module (rich world), else the constant.
     dem = eff.get("demand", cfg.weekly_demand)
@@ -88,4 +94,6 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     }
     if demurrage:
         costs["demurrage"] = demurrage  # port held arrivals (rich world only)
+    if rework:
+        costs["rework"] = rework        # quality defects (rich world only)
     return arrived, costs

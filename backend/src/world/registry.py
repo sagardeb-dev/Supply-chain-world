@@ -25,7 +25,7 @@ modules/<name>/ package + its record + one REGISTRY entry here.
 from dataclasses import dataclass
 from typing import Callable
 
-from .modules import demand, disruption, freight, port, supplier
+from .modules import demand, disruption, freight, port, quality, supplier
 
 
 @dataclass(frozen=True)
@@ -67,6 +67,10 @@ def _init_port(cfg):
     return port.PortState()
 
 
+def _init_quality(cfg):
+    return quality.QualityState()
+
+
 DISRUPTION = Module(
     id="disruption", kind="latent-factor",
     state_cls=disruption.HiddenState, kernel=disruption.step_hidden,
@@ -103,6 +107,13 @@ PORT = Module(
     init=_init_port, effect=port.effect,
 )
 
+QUALITY = Module(
+    id="quality", kind="latent-factor",
+    state_cls=quality.QualityState, kernel=quality.step_quality,
+    emit=quality.emit, view=quality.view, drives=quality.DRIVES,
+    init=_init_quality, effect=quality.effect,
+)
+
 
 # ORDER IS LOAD-BEARING: kernels consume rng in this order, so the hidden
 # trajectory is a function of the seed (exogeneity). Disruption first, then
@@ -113,7 +124,9 @@ REGISTRY: tuple[Module, ...] = (DISRUPTION, SUPPLIER)
 # so their rng draws come last and the disruption/supplier trajectories (and the
 # pinned single-factor golden) are unperturbed. Goal-2 worlds use this (or a
 # subset) via World(cfg, registry=RICH).
-RICH: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND, FREIGHT, PORT)
+# The full six-factor world (goals 2/3). Factors APPEND after the base two, so
+# each new factor's rng draws come last and the disruption-only golden holds.
+RICH: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND, FREIGHT, PORT, QUALITY)
 
 
 # ponytail: the paid analyst_briefing is deliberately NOT in any module's emit

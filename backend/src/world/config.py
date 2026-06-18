@@ -101,6 +101,16 @@ class WorldConfig:
     port_outlook_sd: float = 3.0           # sd of the forward outlook (noisier)
     port_demurrage_rate: float = 2.0       # demurrage cost per held unit per week
 
+    # --- supplier-quality semi-Markov kernel (latent module #6, RICH worlds only) ---
+    # Unused unless the quality module is in the registry. Process drift is
+    # gradual-then-sudden: the drifting->out hazard rises with age (tool wear).
+    q_drift_onset: float = 0.04            # in_control -> drifting
+    q_out_base: float = 0.05               # drifting -> out_of_control base hazard
+    q_out_age_slope: float = 0.04          # ...rising per week in drift (tool wear)
+    q_drift_recover: float = 0.20          # drifting -> in_control (caught early)
+    q_out_recover: float = 0.25            # out_of_control -> in_control (intervention)
+    quality_rework_cost: float = 15.0      # rework/scrap cost per defective unit
+
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam
     suez_chokepoint_offset: int = 2       # canal transit ~day 20 of 28
