@@ -37,18 +37,32 @@ class Module:
     emit: Callable                # observe(...) -> {obs_key: value}  -- FLAT, byte-identical to today
     view: Callable                # (cfg) -> {obs_key: {"role", "label"}}  -- presentation manifest
     drives: tuple[str, ...]       # roster instance ids it advances
+    init: Callable | None = None  # (cfg) -> initial state (singleton) | {id: state} (roster).
+                                  # None falls back to state_cls(). The module owns its own
+                                  # reset, so the engine stays factor-agnostic.
+
+
+def _init_disruption(cfg):
+    return disruption.HiddenState()
+
+
+def _init_supplier(cfg):
+    # the full roster (all suppliers); the kernel advances only drifting ids.
+    return {sid: supplier.SupplierState() for sid in supplier.SUPPLIERS}
 
 
 DISRUPTION = Module(
     id="disruption", kind="latent-factor",
     state_cls=disruption.HiddenState, kernel=disruption.step_hidden,
     emit=disruption.emit, view=disruption.view, drives=disruption.DRIVES,
+    init=_init_disruption,
 )
 
 SUPPLIER = Module(
     id="supplier", kind="latent-factor",
     state_cls=supplier.SupplierState, kernel=supplier.step_supplier,
     emit=supplier.emit, view=supplier.view, drives=supplier.DRIVES,
+    init=_init_supplier,
 )
 
 

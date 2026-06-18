@@ -21,16 +21,41 @@ HIDDEN_KEYS = {"event_state", "event_age", "disruption_type",
 
 
 class World:
-    def __init__(self, cfg: WorldConfig | None = None):
+    def __init__(self, cfg: WorldConfig | None = None, registry=None):
         self.cfg = cfg or WorldConfig()
+        # a World is parameterized by (config, registry): different registries
+        # are different worlds. Default = the canonical 2-factor REGISTRY.
+        self.registry = REGISTRY if registry is None else registry
+
+    # self.hidden / self.suppliers are thin aliases into module_states, so the
+    # disruption/supplier-specific engine code and the trace stay untouched
+    # while new singleton factors live in module_states under their own id.
+    @property
+    def hidden(self):
+        return self.module_states["disruption"]
+
+    @hidden.setter
+    def hidden(self, value):
+        self.module_states["disruption"] = value
+
+    @property
+    def suppliers(self):
+        return self.module_states["supplier"]
+
+    @suppliers.setter
+    def suppliers(self, value):
+        self.module_states["supplier"] = value
 
     def reset(self, seed: int) -> dict:
         self.rng = random.Random(seed)
         self.week = 0
-        self.hidden = HiddenState()
-        # factor-2 roster: one reliability chain per supplier. qualified &
-        # backup are frozen-reliable in R1; only spot drifts (R2 adds defunct).
-        self.suppliers = {sid: SupplierState() for sid in SUPPLIERS}
+        # generic per-module state: each module's init() owns its reset (a
+        # singleton state, or a {id: state} roster), so the engine is
+        # factor-agnostic and a new module needs no edit here.
+        self.module_states = {
+            m.id: (m.init(self.cfg) if m.init
+                   else m.state_cls() if m.state_cls else None)
+            for m in self.registry}
         self.books = Books(inventory=self.cfg.initial_inventory)
         # pre-contracted to the qualified incumbent: you don't start a
         # supply chain with no supplier. Default length cfg.contract_weeks.
@@ -120,15 +145,16 @@ class World:
         never consume rng. A module with drives=("",) is the singleton
         world-state (self.hidden); a roster module advances self.suppliers[sid]
         for each id its profile marks drifts=True."""
-        for m in REGISTRY:
+        for m in self.registry:
             if m.kernel is None:
                 continue
             for sid in m.drives:
-                if sid == "":  # the singleton disruption state
-                    self.hidden = m.kernel(self.hidden, self.rng, self.cfg)
-                else:          # a drifting roster supplier
-                    self.suppliers[sid] = m.kernel(
-                        self.suppliers[sid], self.rng, self.cfg)
+                if sid == "":  # a singleton module-state
+                    self.module_states[m.id] = m.kernel(
+                        self.module_states[m.id], self.rng, self.cfg)
+                else:          # a drifting roster member
+                    self.module_states[m.id][sid] = m.kernel(
+                        self.module_states[m.id][sid], self.rng, self.cfg)
 
     def step(self, action: dict):
         """action = {"qty": 0|20|40, "supplier": "qualified"|"spot",
@@ -206,7 +232,7 @@ class World:
             "term_menu": list(TERM_MENU),  # the negotiation options (R5)
         }
         view = {}
-        for m in REGISTRY:
+        for m in self.registry:
             obs.update(m.emit(self._module_state(m), self.cfg))
             view.update(m.view(self.cfg))
         # presentation manifest: each obs key's display role + label, so the
@@ -220,9 +246,9 @@ class World:
         return obs
 
     def _module_state(self, m):
-        """The live state a module's emit reads: the singleton world-state for
-        a drives=("",) module, the supplier roster for a roster module."""
-        return self.hidden if m.drives == ("",) else self.suppliers
+        """The live state a module's emit reads: its entry in module_states
+        (a singleton state, or the roster dict)."""
+        return self.module_states[m.id]
 
     def _display_contract(self, c) -> dict:
         return {"supplier": SUPPLIER_DISPLAY[self.cfg.semantics][c.supplier],
