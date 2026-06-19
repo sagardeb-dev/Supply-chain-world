@@ -48,8 +48,11 @@ returns `(arrived_qty, cost_breakdown)`. In order:
 4. **Consume demand.** `demand` effect units (else `cfg.weekly_demand`) are
    served from inventory; the unserved part is a stockout.
 5. **Total the cost.** shipping, surcharge, holding, in-transit holding,
-   stockout, the `couple` term, and — in the rich world only — demurrage and
-   rework.
+   stockout, the `couple` term, and — in the rich world — demurrage and rework.
+   Those two lines are emitted **every** rich-world week (value `0.0` when no
+   arrival was held / no batch was defective), so the *set* of cost keys is
+   constant and the presence of a line never side-channels the hidden
+   port/quality state. The default world emits neither key.
 
 ## Effects: how the rich modules reach the physics
 
