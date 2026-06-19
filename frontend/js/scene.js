@@ -8,6 +8,10 @@ import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer
 // ---- map geometry (x: west<0<east, z: north<0<south) ----------------------
 const PORT_ASIA = [85, 6];
 const PORT_EU = [-76, -10];
+// factor 2: two supplier nodes inland (east) of the origin port, each
+// feeding Shanghai. Qualified above, spot below.
+const SUP_QUALIFIED = [108, -6];
+const SUP_SPOT = [108, 18];
 const PT_BAB = [27, 26];
 const PT_CANAL = [7, 7];
 const PT_CAPE = [-22, 66];
@@ -237,6 +241,27 @@ export class SceneView {
     };
     this.scene.add(this.flows.suez.mesh, this.flows.cape.mesh);
 
+    // factor 2: upstream supplier stage — two nodes + short feeder lanes
+    // into the origin port. Feeder density encodes the shipped fraction;
+    // the chosen supplier's lane lights, the other dims (set in applyObs).
+    this.supCurves = {
+      qualified: curveFrom([SUP_QUALIFIED, [97, 0], PORT_ASIA], 0.7),
+      spot: curveFrom([SUP_SPOT, [97, 12], PORT_ASIA], 0.7),
+    };
+    this.scene.add(this.tube(this.supCurves.qualified, COL.suez));
+    this.scene.add(this.tube(this.supCurves.spot, COL.cape));
+    this.feeders = {
+      qualified: new LaneFlow(this.supCurves.qualified, COL.suez, 14),
+      spot: new LaneFlow(this.supCurves.spot, COL.cape, 14),
+    };
+    this.scene.add(this.feeders.qualified.mesh, this.feeders.spot.mesh);
+    this.addPort(SUP_QUALIFIED);
+    this.addPort(SUP_SPOT);
+    this.supLabels = {
+      qualified: this.anchorLabel(SUP_QUALIFIED, 'map-label sup'),
+      spot: this.anchorLabel(SUP_SPOT, 'map-label sup'),
+    };
+
     // player shipments, keyed by dispatched week (one order per week)
     this.ships = new Map();
     this.displayWeek = 0;
@@ -283,6 +308,25 @@ export class SceneView {
     this.labels = labels;
     this.portLabels.origin.element.textContent = labels.origin;
     this.portLabels.dest.element.textContent = labels.dest;
+    if (this.supLabels) {
+      this.supLabels.qualified.element.textContent = labels.supQualified;
+      this.supLabels.spot.element.textContent = labels.supSpot;
+    }
+  }
+
+  // Light the chosen supplier's feeder at a density proportional to the
+  // shipped qty (degraded spot ships short -> a thin/stuttering feeder);
+  // the unchosen feeder idles. obs.sourcing is null when nothing shipped.
+  _driveFeeders(obs) {
+    if (!this.feeders) return;
+    const chosen = obs.sourcing?.supplier ?? null;
+    const shipped = obs.sourcing?.shipped ?? 0;
+    for (const id of ['qualified', 'spot']) {
+      const lit = id === chosen;
+      // density: ~2 dots per shipped unit on the chosen lane, idle otherwise
+      this.feeders[id].setCount(lit ? Math.max(2, shipped) : 0);
+      this.feeders[id].mesh.material.opacity = lit ? 0.9 : 0.18;
+    }
   }
 
   reset(obs) {
@@ -303,6 +347,7 @@ export class SceneView {
     this.flows.suez.setCount(obs.suezCount);
     this.flows.cape.setCount(obs.capeCount);
     this.barrier.visible = obs.suezCount === 0;
+    this._driveFeeders(obs);
 
     const seen = new Set();
     for (const s of obs.pipeline) {
@@ -400,6 +445,10 @@ export class SceneView {
 
     this.flows.suez.update(t, dt);
     this.flows.cape.update(t, dt);
+    if (this.feeders) {
+      this.feeders.qualified.update(t, dt);
+      this.feeders.spot.update(t, dt);
+    }
     for (const cp of Object.values(this.cp)) cp.update(t);
 
     this.controls.update();

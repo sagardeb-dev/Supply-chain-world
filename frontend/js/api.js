@@ -17,7 +17,8 @@ async function call(method, path, body) {
 
 export const api = {
   createEpisode: (seed, semantics, research) => call('POST', '/episodes', { seed, semantics, research_mode: research }),
-  step: (id, qty, route) => call('POST', `/episodes/${id}/step`, { qty, route }),
+  step: (id, qty, route, supplier, contract) =>
+    call('POST', `/episodes/${id}/step`, { qty, route, supplier, contract }),
   briefing: (id) => call('POST', `/episodes/${id}/briefing`),
   trace: (id) => call('GET', `/episodes/${id}/trace`),
   xray: (id) => call('GET', `/episodes/${id}/xray`),
@@ -34,21 +35,32 @@ const ROUTE_SEND = {
   anon: { suez: 'route_1', cape: 'route_2' },
 };
 
+const SUPPLIER_SEND = {
+  real: { qualified: 'qualified', spot: 'spot', backup: 'backup' },
+  anon: { qualified: 'source_a', spot: 'source_b', backup: 'source_c' },
+};
+
 export const LABELS = {
   real: {
     suez: 'Suez Canal', bab: 'Bab el-Mandeb', cape: 'Cape of Good Hope',
     routeSuez: 'Suez', routeCape: 'Cape',
     origin: 'Shanghai', dest: 'Rotterdam',
+    supQualified: 'Incumbent', supSpot: 'Spot', supBackup: 'Backup',
   },
   anon: {
     suez: 'Waterway One', bab: 'The Strait', cape: 'Waterway Two',
     routeSuez: 'Waterway 1', routeCape: 'Waterway 2',
     origin: 'Origin Port', dest: 'Destination',
+    supQualified: 'Source A', supSpot: 'Source B', supBackup: 'Source C',
   },
 };
 
 export function routeForWire(semantics, canonical) {
   return ROUTE_SEND[semantics][canonical];
+}
+
+export function supplierForWire(semantics, canonical) {
+  return SUPPLIER_SEND[semantics][canonical];
 }
 
 export function normalizeObs(obs, semantics) {
@@ -67,8 +79,58 @@ export function normalizeObs(obs, semantics) {
       dispatched: s.dispatched_week,
       eta: s.eta,
       route: s.route === 'route_2' || s.route === 'cape' ? 'cape' : 'suez',
+      supplier: canonicalSupplier(s.supplier),
       status: s.status.startsWith('queued') ? 'queued'
         : s.status.startsWith('diverted') ? 'diverted' : 'at_sea',
     })),
+    // factor 2: the OTIF scorecard (canonical ids), and what was sourced
+    // this week derived from the newest shipment (an action fact, not an
+    // emission fact — see spec A5).
+    suppliers: (obs.suppliers ?? []).map((s) => ({
+      id: canonicalSupplier(s.id),
+      otif: s.otif,                       // null => defunct (shows '-')
+      leadDays: s.lead_days,
+      band: s.band,                       // ontime|slipping|failing|defunct
+      onboardLead: s.onboard_lead ?? 0,
+      unitDelta: s.unit_delta != null ? s.unit_delta
+        : (s.unit_discount != null ? -s.unit_discount : s.unit_premium),
+    })),
+    sourcing: sourcingFromPipeline(obs.pipeline, obs.week),
+    // contracts (a timer + terms the agent set) and the auto-renewal prompt
+    contracts: (obs.contracts ?? []).map((c) => ({
+      supplier: canonicalSupplier(c.supplier),
+      startWeek: c.start_week,
+      endWeek: c.end_week,               // null => evergreen incumbent
+      unitPrice: c.unit_price,
+      otifFloor: c.otif_floor,
+      breakFee: c.break_fee,
+    })),
+    contractOpen: (obs.contract_open ?? []).map(canonicalSupplier),
+    termMenu: obs.term_menu ?? [],
+    // presentation manifest {obs_key: {role, label}} from the backend, so
+    // ui.js can render passive keys by declared role (Task 5). Labels already
+    // come through the per-semantics maps, so this is display-only.
+    view: obs._view ?? {},
+    // raw value per _view key, so a NEW passive module (a key not hand-mapped
+    // above) survives into the normalized obs and renders generically -- the
+    // "zero new JS" property. Keys an existing panel already owns are excluded
+    // from generic rendering in ui.js, not here.
+    viewValues: Object.fromEntries(
+      Object.keys(obs._view ?? {}).map((k) => [k, obs[k]])),
   };
+}
+
+// anon source_* (or already-canonical) -> canonical roster id
+function canonicalSupplier(id) {
+  if (id === 'source_b' || id === 'spot') return 'spot';
+  if (id === 'source_c' || id === 'backup') return 'backup';
+  return 'qualified';
+}
+
+// The newest shipment dispatched THIS week tells us which supplier was
+// sourced and how much actually shipped vs ordered. null if nothing shipped.
+function sourcingFromPipeline(pipeline, week) {
+  const fresh = pipeline.find((s) => s.dispatched_week === week);
+  if (!fresh) return null;
+  return { supplier: canonicalSupplier(fresh.supplier), shipped: fresh.qty };
 }

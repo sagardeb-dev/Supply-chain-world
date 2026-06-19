@@ -7,6 +7,16 @@ const REGIME_COLORS = {
   blockage: '#9333ea', crisis: '#dc2626', recovery: '#2e7fb8',
 };
 
+// _view keys a bespoke panel already renders (counts -> news accent, bulletin
+// -> news text, suppliers -> scorecard). Everything else in the manifest is
+// rendered generically by role, so a new passive module needs no new JS. The
+// anon count keys alias the real ones, so include both spellings.
+const OWNED_VIEW_KEYS = new Set([
+  'suez_count', 'bab_count', 'cape_count',
+  'waterway1_count', 'strait_count', 'waterway2_count',
+  'bulletin', 'suppliers',
+]);
+
 // One week-cell for a regime strip (shared by the x-ray rail and the
 // end-of-episode reveal). `marks` is an optional short overlay string.
 function regimeCell(week, regime, tip, marks = '') {
@@ -23,7 +33,10 @@ export class UI {
     this.handlers = handlers;
     this.qty = 0;
     this.route = 'suez';
+    this.supplier = 'qualified';
     this.routeLabels = { suez: 'Suez', cape: 'Cape' };
+    this.supplierLabels = { qualified: 'Incumbent', spot: 'Spot', backup: 'Backup' };
+    this.contractOpen = [];  // suppliers whose contract needs renewal
 
     $('qty-seg').addEventListener('click', (e) => {
       const btn = e.target.closest('button');
@@ -37,7 +50,14 @@ export class UI {
       this.route = btn.dataset.route;
       this.syncDeck();
     });
-    $('btn-commit').addEventListener('click', () => handlers.onCommit(this.qty, this.route));
+    $('supplier-seg').addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn || btn.disabled) return;
+      this.supplier = btn.dataset.supplier;
+      this.syncDeck();
+    });
+    $('btn-commit').addEventListener('click',
+      () => handlers.onCommit(this.qty, this.route, this.supplier));
     $('btn-briefing').addEventListener('click', handlers.onBriefing);
     $('btn-start').addEventListener('click', () => handlers.onStart(
       Number($('inp-seed').value), $('inp-semantics').value, $('inp-research').checked));
@@ -64,15 +84,22 @@ export class UI {
   beginEpisode(labels) {
     $('xray-rail').classList.add('hidden');
     this.routeLabels = { suez: labels.routeSuez, cape: labels.routeCape };
+    this.supplierLabels = { qualified: labels.supQualified, spot: labels.supSpot,
+                            backup: labels.supBackup };
     const [sBtn, cBtn] = $('route-seg').querySelectorAll('button');
     sBtn.firstChild.textContent = labels.routeSuez;
     cBtn.firstChild.textContent = labels.routeCape;
+    const [qBtn, pBtn, bBtn] = $('supplier-seg').querySelectorAll('button');
+    qBtn.firstChild.textContent = labels.supQualified;
+    pBtn.firstChild.textContent = labels.supSpot;
+    if (bBtn) bBtn.firstChild.textContent = labels.supBackup;
     $('modal-new').classList.add('hidden');
     for (const id of ['week-pill', 'total-cost', 'news', 'books', 'deck']) {
       $(id).classList.remove('hidden');
     }
     this.qty = 0;
     this.route = 'suez';
+    this.supplier = 'qualified';
     this.clearBriefing();
     this.syncDeck();
   }
@@ -84,6 +111,11 @@ export class UI {
     for (const b of $('route-seg').querySelectorAll('button')) {
       b.disabled = this.qty === 0;
       b.classList.toggle('active', this.qty !== 0 && b.dataset.route === this.route);
+    }
+    for (const b of $('supplier-seg').querySelectorAll('button')) {
+      b.disabled = this.qty === 0;
+      b.classList.toggle('active',
+        this.qty !== 0 && b.dataset.supplier === this.supplier);
     }
   }
 
@@ -101,6 +133,10 @@ export class UI {
     $('briefing-card').classList.add('hidden');
   }
 
+  // The obs→view boundary. EXTENSION POINT (hidden-factor scaling): a 2nd
+  // latent module adds fields to obs; render them as additional rows here
+  // (books / counts), not a bespoke panel per factor. The scene geometry is
+  // world-specific and extended separately when a new factor lands.
   update(obs, totalCost, horizon) {
     $('week-label').textContent = `Week ${obs.week} / ${horizon}`;
     $('week-fill').style.width = `${(obs.week / horizon) * 100}%`;
@@ -138,9 +174,111 @@ export class UI {
     if (!entries.length) chips.innerHTML = '<span class="dim">—</span>';
     for (const [k, v] of entries) {
       const chip = document.createElement('span');
-      chip.className = `chip ${k === 'stockout' || k === 'surcharge' ? 'bad' : ''}`;
+      chip.className = `chip ${k === 'stockout' || k === 'surcharge' || k === 'couple' ? 'bad' : ''}`;
       chip.textContent = `${k.replace('_', ' ')} $${Math.round(v)}`;
       chips.appendChild(chip);
+    }
+
+    this._renderScorecard(obs);
+    this._renderByRole(obs);
+  }
+
+  // Generic passive-role renderer (the "zero new JS" property). Iterates the
+  // _view manifest and renders any scalar/series/band key NOT already owned by
+  // a bespoke panel as a labelled row -- so a new PASSIVE latent module
+  // appears with no ui.js or HTML edit. Action-levers (the scorecard, the
+  // order deck) stay bespoke: they compose action facts (sourced/contracted/
+  // defunct) the store would have to pre-compose, which is real interaction
+  // code, not a passive display -- deliberately out of scope here.
+  _renderByRole(obs) {
+    const host = $('role-panel');
+    if (!host) return;
+    host.innerHTML = '';
+    const view = obs.view ?? {};
+    const values = obs.viewValues ?? {};
+    for (const [key, meta] of Object.entries(view)) {
+      if (OWNED_VIEW_KEYS.has(key)) continue;   // a bespoke panel renders it
+      const row = document.createElement('div');
+      if (meta.role === 'scalar' || meta.role === 'band') {
+        row.className = `role-row role-${meta.role}`;
+        const accent = meta.role === 'band' ? ` band-${values[key]}` : '';
+        row.innerHTML = `<span class="role-label">${meta.label}</span>` +
+          `<span class="role-val${accent}">${values[key]}</span>`;
+      } else if (meta.role === 'series') {
+        row.className = 'role-row role-series';
+        row.innerHTML = `<span class="role-label">${meta.label}</span>` +
+          `<span class="role-text">${values[key]}</span>`;
+      } else {
+        continue;  // roster-row/chip/timeline are owned by bespoke panels
+      }
+      host.appendChild(row);
+    }
+  }
+
+  // factor 2 HUD: a two-row OTIF scorecard. Severity accent by OTIF band
+  // (green >=95 / amber 80-94 / red <80); the amber 'slipping' band is the
+  // visible 1-week ambiguity. The sourced supplier gets a "<- sourced" mark.
+  _renderScorecard(obs) {
+    const rows = $('scorecard-rows');
+    if (!rows) return;
+    rows.innerHTML = '';
+    const sourced = obs.sourcing?.supplier ?? null;
+    const contracted = new Set((obs.contracts ?? []).map((c) => c.supplier));
+    for (const s of obs.suppliers ?? []) {
+      // band-driven severity: defunct = dead (the collapse is visible).
+      const accent = s.band === 'defunct' ? 'level-dead'
+        : s.band === 'failing' ? 'level-alert'
+        : s.band === 'slipping' ? 'level-warn' : '';
+      const li = document.createElement('div');
+      li.className = `sc-row ${accent} ${s.id === sourced ? 'sourced' : ''}`;
+      const name = this.supplierLabels[s.id] ?? s.id;
+      const otif = s.otif == null ? '—' : `${s.otif}%`;
+      const delta = s.unitDelta >= 0 ? `+$${s.unitDelta}` : `−$${Math.abs(s.unitDelta)}`;
+      const marks = [];
+      if (contracted.has(s.id)) marks.push('◆ contracted');
+      if (s.id === sourced) marks.push('← sourced');
+      if (s.onboardLead) marks.push(`${s.onboardLead}wk onboard`);
+      const mark = marks.length
+        ? `<span class="sc-mark">${marks.join('  ·  ')}</span>` : '';
+      const dead = s.band === 'defunct' ? ' <span class="sc-dead">DEFUNCT</span>' : '';
+      li.innerHTML = `<span class="sc-name">${name}${dead}</span>
+        <span class="sc-otif">OTIF ${otif}</span>
+        <span class="sc-lead">lead ${s.leadDays ?? '—'}d</span>
+        <span class="sc-unit">${delta}/u</span>${mark}`;
+      rows.appendChild(li);
+    }
+    this._renderContracts(obs);
+  }
+
+  // The contract HUD: active contracts (supplier, ends-week, terms) + the
+  // auto-renewal PROMPT. When obs.contractOpen is non-empty, a banner appears
+  // -- this is the emergence surfacing in the UI, fired by the world's own
+  // standing rule (expiry or a defunct supplier), not by any scripted week.
+  _renderContracts(obs) {
+    const host = $('contract-rows');
+    if (!host) return;
+    host.innerHTML = '';
+    for (const c of obs.contracts ?? []) {
+      const name = this.supplierLabels[c.supplier] ?? c.supplier;
+      const ends = c.endWeek == null ? 'evergreen' : `ends wk ${c.endWeek}`;
+      const open = (obs.contractOpen ?? []).includes(c.supplier);
+      const chip = document.createElement('div');
+      chip.className = `contract-chip ${open ? 'open' : ''}`;
+      chip.innerHTML = `<span class="ct-sup">${name}</span>
+        <span class="ct-ends">${ends}</span>
+        <span class="ct-price">$${c.unitPrice.toFixed(1)}/u</span>`;
+      host.appendChild(chip);
+    }
+    const banner = $('contract-prompt');
+    if (banner) {
+      const open = obs.contractOpen ?? [];
+      if (open.length) {
+        const names = open.map((id) => this.supplierLabels[id] ?? id).join(', ');
+        banner.textContent = `⚠ contract open: ${names} — renew, switch, or let lapse`;
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
     }
   }
 

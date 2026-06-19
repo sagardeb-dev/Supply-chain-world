@@ -1,14 +1,14 @@
-"""Agent-facing text and label layer, in two parallel vocabularies.
-"real" carries genuine referents (Suez, Red Sea, groundings, attacks) -
-the domain-knowledge channel under test in the semantics ablation.
-"anon" is structurally identical with referents stripped.
+"""The disruption module's agent-facing text, in two parallel vocabularies.
+"real" carries genuine referents (Suez, Red Sea, groundings, attacks) - the
+domain-knowledge channel under test in the semantics ablation. "anon" is
+structurally identical with referents stripped.
 
 Rules (V1_CHANGE_LOG 2026-06-11(b)):
 R1 - bulletins are a pure function of HiddenState.regime, so the shared
-     "crash" regime makes false_alarm and week-0 of either disruption
-     type byte-identical, mirroring the count ambiguity exactly.
-R2 - no duration or probability language anywhere: the duration prior
-     IS the domain knowledge being measured.
+     "crash" regime makes false_alarm and week-0 of either disruption type
+     byte-identical, mirroring the count ambiguity exactly.
+R2 - no duration or probability language anywhere: the duration prior IS
+     the domain knowledge being measured.
 R3 - both modes carry identical information (same revelation timing).
 """
 
@@ -84,23 +84,10 @@ BRIEFINGS = {
     },
 }
 
-ROUTE_DISPLAY = {
-    "real": {"suez": "suez", "cape": "cape"},
-    "anon": {"suez": "route_1", "cape": "route_2"},
-}
-ROUTE_PARSE = {mode: {v: k for k, v in m.items()}
-               for mode, m in ROUTE_DISPLAY.items()}
-
+# The count-key rename for the anon ablation (this module's own keys).
 COUNT_KEYS = {
     "real": {"suez_count": "suez_count", "bab_count": "bab_count",
              "cape_count": "cape_count"},
     "anon": {"suez_count": "waterway1_count", "bab_count": "strait_count",
              "cape_count": "waterway2_count"},
-}
-
-STATUS_DISPLAY = {
-    "real": {"at_sea": "at_sea", "queued_at_suez": "queued_at_suez",
-             "diverted_via_cape": "diverted_via_cape"},
-    "anon": {"at_sea": "at_sea", "queued_at_suez": "queued_at_waterway1",
-             "diverted_via_cape": "diverted_via_waterway2"},
 }

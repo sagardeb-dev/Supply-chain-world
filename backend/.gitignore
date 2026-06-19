@@ -9,3 +9,5 @@ wheels/
 # Virtual environments
 .venv
 claude-mds/
+# agent run artifacts (logs, world pickles, sqlite checkpoints)
+runs/

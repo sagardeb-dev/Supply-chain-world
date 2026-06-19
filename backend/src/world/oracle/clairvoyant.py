@@ -8,9 +8,9 @@ value with no future knowledge) comes next - see V1_CHANGE_LOG.md."""
 
 from functools import lru_cache
 
-from .config import WorldConfig
-from .engine import World
-from .state import HiddenState
+from ..config import WorldConfig
+from ..engine import World
+from ..modules.disruption import HiddenState
 
 
 def hidden_trajectory(seed: int, cfg: WorldConfig) -> list[HiddenState]:
@@ -81,8 +81,10 @@ def optimal_plan_for(trajectory: list[HiddenState], cfg: WorldConfig):
         for qty, route in actions:
             if qty:
                 a = arr[(route, week)]
+                # qualified-supplier economics: the clairvoyant plan replays
+                # the engine, which sources qualified, so it pays the premium.
                 unit = (cfg.suez_unit_cost if route == "suez"
-                        else cfg.cape_unit_cost)
+                        else cfg.cape_unit_cost) + cfg.qualified_premium
                 lands = a is not None and a <= H
                 transit_weeks = (a if lands else H + 1) - week
                 dispatch_cost = (qty * unit

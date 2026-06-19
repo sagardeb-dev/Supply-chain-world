@@ -10,8 +10,8 @@ its congestion point at dispatch+cape_chokepoint_offset."""
 
 from dataclasses import dataclass
 
-from .config import WorldConfig
-from .state import HiddenState
+from ..config import WorldConfig
+from ..modules.disruption import HiddenState
 
 
 @dataclass
@@ -19,6 +19,7 @@ class Shipment:
     qty: int
     route: str
     dispatched_week: int
+    supplier: str = "qualified"       # which supplier dispatched it (attribution)
     status: str = "at_sea"            # at_sea | queued_at_suez | diverted_via_cape
     arrives_week: int | None = None   # fixed once the chokepoint resolves
 
@@ -32,6 +33,7 @@ class Shipment:
 
     def to_dict(self, cfg: WorldConfig) -> dict:
         return {"qty": self.qty, "route": self.route,
+                "supplier": self.supplier,
                 "dispatched_week": self.dispatched_week,
                 "status": self.status, "eta": self.eta(cfg)}
 
@@ -40,6 +42,9 @@ class Books:
     def __init__(self, inventory: int):
         self.inventory = inventory
         self.pipeline: list[Shipment] = []
+        self.contracts = []  # list[Contract]; an INSTANCE list, so holding two
+                             # live contracts at once (dual-sourcing, R6) is legal
+                             # by data shape, not a special case.
 
 
 def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> float:
@@ -75,36 +80,3 @@ def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> float:
             extra = cfg.cape_congested_extra_weeks if congested else 0
             s.arrives_week = s.dispatched_week + cfg.cape_total_weeks + extra
     return 0.0
-
-
-def resolve_week(books: Books, qty: int, route: str | None, h: HiddenState,
-                 week: int, cfg: WorldConfig):
-    """Dispatch this week's order (if any), move every in-flight ship one
-    week, land arrivals, consume demand. Returns (arrived_qty, cost_breakdown)."""
-    shipping = 0.0
-    if qty:
-        unit = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
-        books.pipeline.append(Shipment(qty, route, week))
-        shipping = qty * unit
-
-    surcharge = 0.0
-    for s in books.pipeline:
-        surcharge += _advance(s, h, week, cfg)
-
-    arrived = sum(s.qty for s in books.pipeline if s.arrives_week == week)
-    books.pipeline = [s for s in books.pipeline if s.arrives_week != week]
-    books.inventory += arrived
-
-    served = min(books.inventory, cfg.weekly_demand)
-    shortfall = cfg.weekly_demand - served
-    books.inventory -= served
-
-    in_transit = sum(s.qty for s in books.pipeline)
-    costs = {
-        "shipping": shipping,
-        "surcharge": surcharge,  # diverted voyages billed at the Cape rate
-        "holding": cfg.holding_cost * books.inventory,
-        "in_transit": cfg.holding_cost * in_transit,  # capital cost on the water
-        "stockout": cfg.stockout_cost * shortfall,
-    }
-    return arrived, costs

@@ -4,20 +4,6 @@ V1_CHANGE_LOG.md (2026-06-11 entry)."""
 
 from dataclasses import dataclass
 
-# Noiseless weekly transit counts (suez, bab, cape), keyed by visible regime.
-# "crash" is shared by false_alarm AND the first week of either disruption
-# type — the deliberate ambiguity. One week later the regimes separate.
-REGIME_COUNTS = {
-    "calm":     (70, 70, 60),
-    "watch":    (63, 63, 60),   # caution dip ~10%
-    "crash":    (28, 25, 66),   # news breaks: transits crash, small cape uptick
-    "blockage": (0, 0, 72),     # short type, age>=1: canal physically shut
-    "crisis":   (14, 10, 96),   # long type, age>=1: -75/-90% transits, cape +60%
-    "recovery": (56, 56, 69),   # backlog clearing
-}
-CAPE_LOCAL_EXTRA = 21           # iid local Cape-port congestion, cape channel only
-
-
 @dataclass(frozen=True)
 class WorldConfig:
     horizon_weeks: int = 26
@@ -35,6 +21,101 @@ class WorldConfig:
     recovery_persist_prob: float = 0.50
     max_recovery_weeks: int = 3
     cape_local_prob: float = 0.08         # stochastic root #2: iid weekly coin
+
+    # --- supplier S reliability semi-Markov kernel (stochastic root #3) ---
+    # Fully independent of the disruption kernel (Becker transition independence):
+    # this factor's next state reads ONLY SupplierState. Its own latent module.
+    sup_onset_prob: float = 0.10          # reliable -> wobbling; spot sources drift
+    sup_wobble_to_degraded: float = 0.45  # the slip becomes real failure
+    sup_wobble_to_reliable: float = 0.35  # the slip recovers (a false scare)
+    sup_degraded_persist: float = 0.70    # degraded spells run ~3 wks
+    sup_max_degraded: int = 4
+    # Lever 1 (the defunct primitive): per-week hazard that a chronically
+    # failing (degraded) supplier dies for good. ~16% tech-sector bankruptcy /
+    # 14.5% of disruptions are supplier failures -> a few % per week from
+    # degraded gives a realistic 'distressed -> dead' tail. Absorbing.
+    sup_defunct_from_degraded: float = 0.06
+    # --- supplier economics ---
+    spot_unit_discount: float = 1.5       # S is 1.5/unit cheaper than Q's lane cost
+    qualified_premium: float = 1.0        # Q adds 1.0/unit over the route base cost
+    # --- backup supplier (Hangzhou) economics. OTIF/lead/onboarding live in
+    # the SUPPLIERS profile (display facts); only the unit delta is a cost knob.
+    backup_unit_delta: float = 0.3        # a small premium (dearer than spot, < Q)
+    # --- contracts (R4): a timer + terms. Default length; menu of lengths R5 ---
+    contract_weeks: int = 8               # ~3 renewal events per 26-wk horizon
+    contract_otif_floor: int = 85         # penalty clause threshold (R5)
+    contract_break_fee: float = 10.0      # early-exit cost (irreversibility teeth)
+    # Lever 3: weekly overhead for carrying >=2 live contracts (managing two
+    # supplier relationships). The ONLY thing authored for dual-sourcing; the
+    # STRATEGY emerges as the agent's response to this vs spot's volatility.
+    dual_source_overhead: float = 4.0
+    # The cost COUPLING knob (Becker JV term): a spot shortfall during a
+    # disruption-active week is back-ordered at the crisis spot rate. Set to
+    # 3x the stockout cost so gambling on spot when the Red Sea is twitchy is
+    # punishing -- this is the only calibration knob the hedge turns on.
+    crisis_backorder_kappa: float = 60.0  # = 3.0 x stockout_cost
+
+    # --- demand semi-Markov kernel (latent module #3, RICH worlds only) ---
+    # Unused unless the demand module is in the registry, so adding these does
+    # not touch the default 2-factor world. Grounded in demand sensing / CPFR /
+    # bullwhip: promo is a fixed-length calendar spike, seasonal a sustained
+    # lift, decline a sticky downshift.
+    demand_promo_onset: float = 0.03       # normal -> promo_spike
+    demand_seasonal_onset: float = 0.015   # normal -> seasonal_lift
+    demand_decline_onset: float = 0.005    # normal -> structural_decline
+    demand_promo_max: int = 4              # promo runs a fixed ~4 wks then ends
+    demand_seasonal_persist: float = 0.85  # seasonal lift sticks week to week
+    demand_seasonal_max: int = 8           # seasonal caps at ~8 wks
+    demand_decline_persist: float = 0.97   # structural decline is sticky
+    # realized POS is a noisy draw around the regime mean (so the regime must be
+    # FILTERED over weeks, not read in one); the forward forecast is a second,
+    # noisier read of the same mean (demand sensing). ~Poisson spread at mean 20.
+    demand_noise_sd: float = 4.0           # sd of the realized weekly POS
+    demand_forecast_sd: float = 6.0        # sd of the forward forecast (noisier)
+
+    # --- freight-rate semi-Markov kernel (latent module #4, RICH worlds only) ---
+    # Unused unless the freight module is in the registry. Grounded in FBX/SCFI
+    # spot dynamics: tightening via carrier discipline/GRIs, spike via shocks.
+    fr_tighten_onset: float = 0.06         # normal -> tightening
+    fr_slack_onset: float = 0.04           # normal -> slack
+    fr_spike_onset: float = 0.18           # tightening -> spike (shock escalation)
+    fr_tighten_recover: float = 0.25       # tightening -> normal (GRI fades)
+    fr_tighten_max: int = 6                # tightening caps at ~6 wks
+    fr_spike_persist: float = 0.80         # spike decays (mean ~5 wks)
+    fr_spike_max: int = 6                  # spike caps at ~6 wks
+    fr_slack_persist: float = 0.93         # slack is sticky (overcapacity lingers)
+    fr_noise_sd: float = 0.15              # sd of the realized rate multiplier
+    fr_outlook_sd: float = 0.25            # sd of the forward outlook (noisier)
+
+    # --- port/customs semi-Markov kernel (latent module #5, RICH worlds only) ---
+    # Unused unless the port module is in the registry. Destination-stage dwell:
+    # congestion backlogs run weeks; customs holds are short (~1 wk).
+    port_build_onset: float = 0.06         # clear -> building
+    port_customs_onset: float = 0.04       # clear -> customs_hold
+    port_congest_onset: float = 0.30       # building -> congested
+    port_build_clear: float = 0.30         # building -> clear
+    port_congest_persist: float = 0.85     # congestion is sticky (~5 wks)
+    port_congest_max: int = 8              # congestion caps at ~8 wks
+    port_customs_persist: float = 0.20     # customs hold is short (~1 wk)
+    port_wait_noise_sd: float = 2.0        # sd of the realized berth-wait days
+    port_outlook_sd: float = 3.0           # sd of the forward outlook (noisier)
+    port_demurrage_rate: float = 2.0       # demurrage cost per held unit per week
+
+    # --- supplier-quality semi-Markov kernel (latent module #6, RICH worlds only) ---
+    # Unused unless the quality module is in the registry. Process drift is
+    # gradual-then-sudden: the drifting->out hazard rises with age (tool wear).
+    q_drift_onset: float = 0.04            # in_control -> drifting
+    q_out_base: float = 0.05               # drifting -> out_of_control base hazard
+    q_out_age_slope: float = 0.04          # ...rising per week in drift (tool wear)
+    q_drift_recover: float = 0.20          # drifting -> in_control (caught early)
+    q_out_recover: float = 0.25            # out_of_control -> in_control (intervention)
+    quality_rework_cost: float = 15.0      # rework/scrap cost per defective unit
+    # The realized batch defect FRACTION is a NOISY draw around the regime mean
+    # (a finite-batch sample, not the exact process rate), so the defective count
+    # the agent sees is a noisy estimate of the hidden regime -- it cannot read
+    # the regime off the arrived/rework delta. Gamma multiplier, mean 1.0,
+    # CV = 1/sqrt(shape); shape 2.0 -> CV ~0.71 (adjacent regimes overlap).
+    q_defect_shape: float = 2.0
 
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam

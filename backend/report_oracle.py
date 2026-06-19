@@ -10,7 +10,7 @@ Regret decomposition per seed:
   causal - clairvoyant = luck premium (information was NOT available)
 """
 
-from src.world.causal_oracle import CausalOracle, causal_play
+from src.world.oracle import CausalOracle, causal_play
 from src.world.config import WorldConfig
 from src.world.engine import World
 from src.world.oracle import oracle_plan
@@ -20,7 +20,7 @@ def fixed_policy_cost(seed: int, route: str, cfg: WorldConfig) -> float:
     w = World(cfg)
     w.reset(seed)
     while not w.done:
-        w.step({"qty": 20, "route": route})
+        w.step({"qty": 20, "route": route, "supplier": "qualified"})
     return w.total_cost
 
 
@@ -34,7 +34,8 @@ def base_stock_cost(seed: int, cfg: WorldConfig, target: int = 80) -> float:
         position = w.books.inventory + sum(s.qty for s in w.books.pipeline)
         deficit = target - position
         qty = 0 if deficit <= 0 else (20 if deficit <= 20 else 40)
-        w.step({"qty": qty, "route": "suez"} if qty else {"qty": 0})
+        w.step({"qty": qty, "route": "suez", "supplier": "qualified"}
+               if qty else {"qty": 0})
     return w.total_cost
 
 
@@ -42,7 +43,8 @@ def replay_cost(seed: int, plan, cfg: WorldConfig) -> float:
     w = World(cfg)
     w.reset(seed)
     for qty, route in plan:
-        w.step({"qty": qty, "route": route} if qty else {"qty": 0})
+        w.step({"qty": qty, "route": route, "supplier": "qualified"}
+               if qty else {"qty": 0})
     return w.total_cost
 
 

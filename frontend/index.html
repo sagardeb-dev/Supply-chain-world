@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>supply-chain-pomdp</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
 {
@@ -14,7 +17,7 @@
 }
 </script>
 </head>
-<body>
+<body data-mode="human">
 
 <div id="scene"></div>
 
@@ -24,6 +27,10 @@
   <div id="week-pill" class="pill hidden">
     <span id="week-label">Week 0 / 26</span>
     <div class="week-track"><div id="week-fill"></div></div>
+  </div>
+  <div id="mode-toggle" class="seg modes">
+    <button data-mode="human" class="active">you play</button>
+    <button data-mode="agent">watch agent</button>
   </div>
   <div class="spacer"></div>
   <div id="total-cost" class="pill cost hidden">total <b>$0</b></div>
@@ -54,8 +61,35 @@
   <ul id="pipeline-list"><li class="dim">no shipments at sea</li></ul>
   <div class="panel-title gap">LAST WEEK'S COSTS</div>
   <div id="cost-chips"><span class="dim">—</span></div>
+  <div class="panel-title gap">SUPPLIER SCORECARD <span class="tag">OTIF</span></div>
+  <div id="scorecard-rows"></div>
+  <div class="panel-title gap">CONTRACTS <span class="tag">timer + terms</span></div>
+  <div id="contract-prompt" class="contract-prompt hidden"></div>
+  <div id="contract-rows"></div>
+  <!-- generic role-panel: passive _view keys (scalar/series/band) not owned
+       by a bespoke panel auto-render here, so a new passive module needs no
+       new JS or HTML. Empty until such a key exists. -->
+  <div id="role-panel"></div>
 </aside>
 
+
+<!-- ======== agent panel ======== -->
+<aside id="agent-panel" class="panel">
+  <div class="panel-title">LLM AGENT <span class="tag">watch it play</span></div>
+  <div id="agent-log"><span class="dim">idle — pick a model and press run.</span></div>
+  <div class="ag-controls">
+    <label>model <input id="ag-model" type="text" value="openai/gpt-4o-mini"></label>
+    <label>seed <input id="ag-seed" type="number" value="3"></label>
+    <label>mode
+      <select id="ag-mode">
+        <option value="autonomous">autonomous</option>
+        <option value="step_gated">step-gated</option>
+      </select>
+    </label>
+    <button id="ag-run" class="primary">run ▶</button>
+    <button id="ag-advance" class="ghost" disabled>advance ▶</button>
+  </div>
+</aside>
 <!-- ======== briefing card ======== -->
 <div id="briefing-card" class="panel hidden">
   <div class="panel-title">ANALYST BRIEFING <span class="tag">$30 · charged at commit</span></div>
@@ -80,6 +114,14 @@
     </div>
   </div>
   <div class="deck-group">
+    <div class="deck-label">supplier</div>
+    <div class="seg" id="supplier-seg">
+      <button data-supplier="qualified" class="active qualified" disabled>Incumbent<span>OTIF 99 · +$1/u</span></button>
+      <button data-supplier="spot" class="spot" disabled>Spot<span>cheaper · may ship short</span></button>
+      <button data-supplier="backup" class="backup" disabled>Backup<span>OTIF 95 · +$0.3/u · 1wk</span></button>
+    </div>
+  </div>
+  <div class="deck-group">
     <div class="deck-label">intel</div>
     <button id="btn-briefing" class="ghost tall">briefing<span>$30</span></button>
   </div>
@@ -98,8 +140,8 @@
       <summary>how this world works</summary>
       <div class="hiw-flow">
         <div class="hiw-node stochastic">
-          <b>HIDDEN</b><span>disruption chain</span>
-          <em>(regime, age, type) · the only random draw · 1/week · seeded</em>
+          <b>HIDDEN ×2</b><span>disruption + supplier</span>
+          <em>two independent chains · supplier reliability drifts too · seeded</em>
         </div>
         <div class="hiw-arrow">→</div>
         <div class="hiw-node">
@@ -108,8 +150,8 @@
         </div>
         <div class="hiw-arrow">→</div>
         <div class="hiw-node">
-          <b>YOU</b><span>qty × route × briefing</span>
-          <em>actions can't move the hidden chain (exogenous)</em>
+          <b>YOU</b><span>qty × supplier × route × briefing</span>
+          <em>actions can't move either hidden chain (exogenous)</em>
         </div>
         <div class="hiw-arrow">→</div>
         <div class="hiw-node">

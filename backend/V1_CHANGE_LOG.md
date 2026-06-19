@@ -3,6 +3,282 @@
 Design decisions for the supply-chain POMDP world. Each entry records what
 changed, why, and the evidence. Code follows this file, never the reverse.
 
+## 2026-06-18 — Module-contract refactor (structural; behavior byte-identical)
+
+### Problem
+
+The 2026-06-17 "module recipe" (state / kernel / emission / actions slots) was a
+CONVENTION followed by hand: the engine still wired each factor by literal instance
+name (`self.suppliers["spot"] = step_supplier(...)`, `sid == "spot"/"qualified"/
+"backup"` branches) and the frontend hand-rendered every obs field. The recipe was
+real but unenforced, so each new factor still meant editing the engine and the JS.
+
+### Decision
+
+Make the recipe EXECUTABLE: a frozen `Module` record + a `REGISTRY` tuple
+(`modules.py`). The engine iterates the registry to advance kernels and assemble
+obs — no instance name appears literally. Two budgets are declared on each record:
+`kind` (oracle cost) and `view` (frontend display role). The `view` manifest rides
+on a reserved `_view` obs key (raw value keys unchanged; oracle readers and the
+leak-guard untouched; anon labels routed through the per-semantics maps), and the
+frontend renders any PASSIVE role generically — a new passive latent module appears
+with zero new JS. Per-supplier economics moved into the `SUPPLIERS` profile (cfg
+stays the single source of truth for the numbers logistics/oracle also read).
+
+### Decision: the resolve_rel / resolve_week mirror is KEPT, not deduped
+
+`causal_oracle.resolve_rel` and `logistics.resolve_week` are an exact mirror pair on
+two different state representations (the DP's canonical tuple vs real Books/Shipment).
+Deduping would de-optimize the DP or leak Books mutability into it (the wrong-
+abstraction trap). Both now carry a `# ponytail: PINNED MIRROR` note; the pair is held
+in lockstep by `test_resolve_rel_mirrors_resolve_week` + the per-step causal_play
+cross-check.
+
+### Evidence
+
+- Oracle anchor `CausalOracle(WorldConfig()).value()` == 4251.9607875333395, identical
+  before and after the structural core (Tasks 1-3). Frontend tasks never touch the
+  oracle path.
+- New `test_world.py` pins: registry covers exactly the two factors (the iid cape coin
+  is subsumed inside the disruption module, NOT a third module); emit byte-identical in
+  real AND anon; the economics golden incl. the backup row; `_view` present, leak-
+  skipped, and anon-label-leak-free. Full structural change is test-green.
+- Frontend "zero new JS" demonstrated live (an injected forecast_error scalar renders,
+  then reverted); all scorecard action marks verified intact.
+- Full record: claude-mds/sequence-of-changes/005-module-contract-refactor.md.
+
+## 2026-06-17 — Supplier roster, contracts, and the three emergence levers
+
+### Problem
+
+The world had one supplier choice (qualified vs spot) and no relationship
+structure. The manager's ask: model real supplier relationships — multiple
+suppliers, contracts with terms and timers, the ability to negotiate, and
+events like a supplier going under. The deeper ask: can these mechanics
+*emerge* from authored primitives, so adding realistic detail does not mean
+hand-coding every scenario? The answer is a recipe (below) and three levers.
+
+### The module recipe (one entity = one module)
+
+Every entity is built from fixed slots, so adding one is additive and the
+exact oracle survives:
+
+- **state** — its own dataclass, reads no other module.
+- **kernel** — `step(state, rng, cfg)`: one tick, own state + shared rng only.
+- **emission** — noiseless, own observation keys.
+- **actions** — finite verbs + a validator.
+- **cost** — the ONLY slot allowed to read more than one module's state.
+
+Two laws keep the exact oracle alive: (1) couple only through cost, so beliefs
+factorize and the oracle is exact factored expectimax — adding a supplier is
++1 marginal; (2) one tick = bounded work, so "negotiation" is menu selection,
+never a multi-round dialogue.
+
+### The three levers (emergence without per-scenario code)
+
+The discipline: **never write a rule against a date or a named scenario —
+only against a condition, a probability, or a cost.**
+
+1. **Generative primitive** — a low-probability kernel transition. Here:
+   `sup_defunct_from_degraded = 0.06`/week, a chronically degraded spot
+   supplier dies for good (absorbing `defunct`). This produces unscheduled
+   collapse events without anyone scripting "week N, supplier dies".
+2. **Standing rule** — a CONDITION, never a date. A contract is *open*
+   (needs attention) iff `expired OR supplier-not-alive`. Nothing references
+   the defunct primitive; yet when a sourced supplier dies, its contract
+   auto-opens and the renewal prompt fires. Proven by
+   `test_defunct_spot_auto_opens_its_contract_no_script`.
+3. **Cost gradient** — `dual_source_overhead = 4.0`/week for carrying ≥2 live
+   time-boxed contracts. We author only the cost; the *strategy* of hedging
+   under volatility emerges as the agent's optimal response.
+
+### Decisions
+
+1. **Roster of three** (`SUPPLIERS` registry): `qualified` (frozen incumbent,
+   OTIF 99, lead 14d, +$1.0/u, evergreen contract), `spot` (drifts via the
+   reliability kernel, −$1.5/u, can ship short or die), `backup` (frozen
+   mid-tier, OTIF 95, lead 16d, +$0.3/u, 1-week onboarding before its first
+   shipment). Only spot carries hidden latent state — the oracle's one
+   supplier chain.
+2. **Per-contract sourcing, not per-order.** You sign a contract with a
+   supplier; sourcing is gated to suppliers with a live contract. No fallback:
+   sourcing an uncontracted supplier raises (`ValueError`), it does not
+   silently substitute.
+3. **Evergreen incumbent.** The qualified contract has `end_week = None` and
+   never expires — avoids the dominance trap only via the `qualified_premium`
+   knob (the incumbent is reliable but dearer, so the cheaper-but-riskier spot
+   stays a real choice).
+4. **Negotiation = menu** (`TERM_MENU`: short/long/strict/lenient), each a
+   bounded set of (weeks, unit multiplier, OTIF floor, break-fee multiplier).
+   `contract_weeks = 8` → ~3 renewal events per 26-week horizon;
+   `contract_otif_floor = 85`; `contract_break_fee = 10.0` (irreversibility
+   teeth on early exit).
+5. **Hard gap.** When an exclusive spot supplier dies, you are stuck — you
+   cannot even source it (its contract is now open) and backup needs
+   onboarding. The punishment is the absence of an escape hatch; it falls out
+   of R2 (defunct → ships 0) × R4 (the mask), not from coded logic.
+
+### Frontend (R8)
+
+- 3-row defunct-aware scorecard (OTIF/lead/unit-delta, severity band, DEFUNCT
+  marker, ◆ contracted / ← sourced / onboard marks).
+- Contract HUD: contract chips (supplier, ends-week or evergreen, unit price)
+  plus an auto-renewal banner that surfaces `contract_open` — the emergence,
+  visible, fired by the world's standing rule, not a scripted week.
+- **Auto-sign UX**: the supplier deck chooses who fulfils this week's order;
+  sourcing a supplier with no open contract auto-signs one in the same step.
+  The act of sourcing IS contracting — no separate sign screen, and it removes
+  the dead-end where selecting an uncontracted supplier hard-failed.
+
+### Oracle gate (R7)
+
+The exact belief-MDP expectimax solver still solves (~122 s once per process)
+and the engine-vs-DP cross-check still passes against the fully rebuilt engine:
+contracts are observed and deterministic (not belief), so coupling stays
+cost-only and the factorization holds. Shipped decision: the oracle remains
+qualified-only-valid for v1 (it sources the incumbent); the fully factored
+supplier-marginal oracle is deferred as a scoped follow-up. The anchor — the
+benchmark's entire value — survives.
+
+### Verification
+
+- `test_world.py`: 80 fast tests pass (2 slow oracle tests deselected for
+  speed; run them for the gate). Key pins: the defunct kernel hazard
+  distribution, the no-script auto-open emergence, the per-contract source
+  mask (raises on uncontracted), the dual-source overhead cost, the hard gap.
+- Live page driven via Playwright: 3-supplier scorecard + contract HUD render;
+  sourcing spot auto-signs and the second contract chip appears (Week 0 → 1,
+  no 500).
+
+### Calibration evidence (supplier reliability + bankruptcy)
+
+| World number | Real anchor |
+|---|---|
+| sup_defunct_from_degraded 0.06/wk | ~16% tech-sector bankruptcy; ~14.5% of disruptions are supplier failures — a few %/wk from a distressed (degraded) supplier gives a realistic 'distressed → dead' tail |
+| qualified OTIF 99 vs spot drift | tier-1 qualified vendors run high, audited OTIF; spot/marketplace sources slip |
+| backup 1-wk onboard | new-supplier qualification/onboarding lead before first PO ships |
+| contract 8 wks | quarter-ish purchase-agreement terms → ~3 renewals/horizon |
+| break fee 10.0 | early-termination clauses are standard teeth on supply contracts |
+
+## 2026-06-17 — LLM agent harness (deepagents, OpenRouter, SSE, resume)
+
+### Problem
+
+The world has a clean Gym-shaped surface (reset / step / request_briefing)
+but no agent and no way to watch one play. A prior attempt produced a
+turn-by-turn agent — re-invoked fresh once per week, no memory across
+weeks, 26 cold questionnaires instead of one continuous planner. That is
+the "quiz not a job" mistake reincarnated in the agent. We need to (a)
+see an LLM play live, and (b) measure the one missing number: how much of
+the causal-oracle skill gap a real LLM captures, and where its reasoning
+fails. That number gates the "scale the factors" decision (which
+difficulty axis is actually too easy) — building a second latent module
+before we have it would be blind.
+
+### Decisions
+
+1. **The agent owns the loop.** One deepagents session runs the whole
+   26-week episode. We hand it its tools once plus a system prompt
+   describing the desk, and let the tool-calling loop run until the
+   episode reports done. There is NO `for week in range(26)` wrapping the
+   agent; the week counter lives inside World. This is the entire point
+   of the rebuild.
+
+2. **Tools mirror the three real world actions, 1:1.** get_week
+   (the current observation), buy_briefing (the paid analyst line),
+   place_order (qty in {0,20,40} x route in {suez,cape}, advances a
+   week). No invented actions, no "assessment report" — the world has
+   exactly these three. The briefing tool is exposed even though the
+   oracle never buys it (the chokepoint leaks make the info effectively
+   free): an agent that buys it is over-spending, and that over-spend is
+   a measurement, not a bug to fix here.
+
+3. **Tools are thin wrappers over the same in-process World methods the
+   HTTP handlers call.** A new svc_* service layer (svc_observation /
+   svc_briefing / svc_step) is the single path both the HTTP API and the
+   agent tools go through — no self-HTTP, no duplicated world logic, same
+   gates. The agent never receives the step() info dict (hidden state);
+   get_week output is asserted to share no key with HIDDEN_KEYS.
+
+4. **No fallback logic, anywhere.** A missing OPENROUTER_API_KEY, a
+   place_order with qty>0 and no route, or a model error each RAISE and
+   surface as a visible SSE `error` event. No silent default route, no
+   retry-with-simpler-prompt, no default order. The run either works or
+   stops loud.
+
+5. **OpenRouter is the sole provider; the key stays server-side.** The
+   model is langchain_openai.ChatOpenAI pointed at
+   https://openrouter.ai/api/v1, key read from os.environ
+   (exported in the VM shell before uvicorn — never committed, never sent
+   to the browser). Any OpenRouter slug can be typed at run time; the
+   frontend default starts cheap to validate plumbing before a flagship
+   run spends credit.
+
+6. **Two run modes via interrupt_on.** Autonomous = the agent plays all
+   26 weeks straight through. Step-gated = create_deep_agent(...,
+   interrupt_on={"place_order": True}) pauses before each order; the
+   human clicks Advance and the run resumes via
+   Command(resume={"decisions":[{"type":"approve"}]}). One config line is
+   the only difference.
+
+7. **True mid-run resume by run_id.** deepagents' AsyncSqliteSaver
+   persists the agent's message history across process restarts; we
+   separately pickle the World object (verified picklable and
+   rng-faithful across pickle) keyed by the same run_id, snapshotting it
+   inside place_order so the agent checkpoint and the world snapshot never
+   diverge by more than one idempotent step. On resume: load the World,
+   rebuild the agent against the same checkpointer + thread_id, continue.
+
+8. **Reasoning streams live over SSE.** agent.astream(input, config,
+   stream_mode=["updates","messages"]) demuxes into SSE events: `thought`
+   (reasoning tokens from messages), `tool_call` and `tool_result`
+   (structured, from updates), `interrupt` (step-gate pause), `done`,
+   `error`. A vanilla-JS EventSource panel renders them; the existing
+   oracle scoreboard fills in at `done`. The 3D scene reacting to the
+   stream is deferred — the text panel is the diagnostic.
+
+### Scope
+
+New code lives in backend/src/agent/ (service, tools, factory, prompt,
+runner) plus four endpoints and a sqlite lifespan in src/api/app.py, plus
+a frontend agent panel. The engine (src/world/*) is UNTOUCHED. New deps
+go in a uv `agent` dependency group. Tests extend test_world.py with a
+MOCKED model — no test makes a live LLM call.
+
+
+### Sign-off (verified 2026-06-17)
+
+Built across commits add5edb..(this). Backend tests: 42/42 (38 prior +
+service_parity, tools_gating, resume_roundtrip, agent_sse_mock; the agent
+tests use a mocked model, no live LLM). Run persistence verified live:
+per-run JSONL log + pickled World snapshots + the deepagents sqlite
+checkpointer all populated by a real episode.
+
+Frontend verified live with Playwright. Two bugs found and fixed there:
+the start modal (z 50) covered the always-on agent panel and ate its
+clicks (panel raised to z 60); and the agent was built synchronously in
+the endpoint, so a missing key raised an opaque 500 instead of a visible
+error (stream() now takes a build thunk and constructs the agent inside
+its try, so missing-key / bad-slug surface as a readable `error` event --
+confirmed live before the key was supplied).
+
+First real agent-vs-oracle datapoint (seed 3, model openai/gpt-oss-120b:nitro,
+autonomous): the agent played all 26 weeks and the scoreboard rendered
+clairvoyant $3200 = causal oracle $3200 (luck premium 0 on this seed),
+best fixed policy $3560, agent $4540. The agent's regret vs the oracle is
+$1340 and it underperformed the naive base-stock policy by ~$1000: it
+settled into a rigid 20-via-Suez-every-week policy, ignored the Red Sea
+disruption bulletin it saw from week 4, never front-loaded (qty 40), and
+never switched to Cape. So the very signal the world is built around went
+unused. This reframes "too easy": the agent is not beating the existing
+task, let alone finding it trivial -- the gap to scale toward is the
+agent's, not the oracle's. The next factor decision should be gated on a
+sweep across seeds and a stronger model, not assumed.
+
+Open / deferred: model dropdown (text input for now), edit/reject in the
+step-gate (approve-only), 3D scene reacting to the stream (text panel is
+the diagnostic), a multi-seed agent sweep.
+
 ## 2026-06-12 — Research surface: read-only API + explainer UI
 
 ### Problem

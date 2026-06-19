@@ -30,9 +30,9 @@ V1_CHANGE_LOG.md 2026-06-11 (c) records the design decisions.
 
 from functools import lru_cache
 
-from .config import REGIME_COUNTS, WorldConfig
-from .engine import World
-from .semantics import BRIEFINGS
+from ..config import WorldConfig
+from ..engine import World
+from ..modules.disruption import BRIEFINGS, REGIME_COUNTS
 
 # Hidden core = (event_state, event_age, disruption_type). The iid
 # cape_local coin never persists, so it is integrated out at the resolve
@@ -111,7 +111,15 @@ def resolve_rel(pipe: tuple, inventory: int, qty: int, route,
                 core: tuple, cape_local: bool, cfg: WorldConfig):
     """One week of logistics on the relative encoding — the exact mirror
     of logistics.resolve_week (pinned by test). Returns
-    (new_pipe, new_inventory, arrived, step_cost)."""
+    (new_pipe, new_inventory, arrived, step_cost).
+
+    ponytail: PINNED MIRROR of logistics.resolve_week. Do NOT dedup the two.
+    They operate on different state reps -- this one on the canonical
+    (e0,e1,queued,arrs) tuple that makes the DP tractable, resolve_week on real
+    Books/Shipment objects. A shared abstraction would de-optimize the DP or
+    leak Books mutability into it (the wrong-abstraction trap). The pair is
+    held in lockstep by test_resolve_rel_mirrors_resolve_week + the per-step
+    causal_play cross-check; change one, change the other, keep both green."""
     e0, e1, queued, (a1, a2, a3) = pipe
     s, _age, dtype = core
     blocked = s == "disruption"
@@ -120,7 +128,10 @@ def resolve_rel(pipe: tuple, inventory: int, qty: int, route,
 
     shipping = 0.0
     if qty:
-        unit = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
+        base = cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost
+        # ponytail: qualified-supplier economics; T7 threads spot discount + the
+        # shortfall/couple branch through here for the second marginal.
+        unit = base + cfg.qualified_premium
         shipping = qty * unit
     new_e0 = (qty, route) if qty else None
 
@@ -330,8 +341,10 @@ def causal_play(seed: int, cfg: WorldConfig | None = None,
             _, qty, route = oracle.decide(week, belief, inv, pipe)
 
         groups = oracle._chance_groups(week, belief, inv, pipe, qty, route)
+        # ponytail: oracle sources qualified until T7 adds the supplier choice.
         obs, cost, done, _info = w.step(
-            {"qty": qty, "route": route} if qty else {"qty": 0})
+            {"qty": qty, "route": route, "supplier": "qualified"}
+            if qty else {"qty": 0})
 
         regime = _SUEZ_TO_REGIME[obs["suez_count"]]
         obs_pipe = _pipe_from_obs(obs, cfg)

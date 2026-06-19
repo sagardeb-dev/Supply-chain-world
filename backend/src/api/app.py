@@ -7,6 +7,12 @@ ever sees canonical names."""
 
 import threading
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# load backend/.env so OPENROUTER_API_KEY (read in agent/factory.py) is present
+# before any agent code runs. Searches cwd upward; uvicorn runs from backend/.
+load_dotenv()
 from typing import Literal
 from uuid import uuid4
 
@@ -17,12 +23,49 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.world import World, WorldConfig
-from src.world.causal_oracle import CausalOracle, causal_play
+from src.world.oracle import CausalOracle, causal_play
 from src.world.oracle import oracle_plan
-from src.world.semantics import ROUTE_PARSE
+from src.world.substrate.semantics import ROUTE_PARSE
+from src.world.modules.supplier import SUPPLIER_PARSE
+from src.agent.service import svc_briefing, svc_step
 from report_oracle import fixed_policy_cost, base_stock_cost
 
-app = FastAPI(title="supply-chain-pomdp")
+from contextlib import asynccontextmanager
+
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+_RUNS_DIR = Path("runs")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Persistent agent checkpointer for the app lifetime. Entered once here
+    (the saver is an async context manager) and shared on app.state so every
+    agent run resumes across process restarts."""
+    _RUNS_DIR.mkdir(exist_ok=True)
+    cm = AsyncSqliteSaver.from_conn_string(str(_RUNS_DIR / "agent_ckpt.sqlite"))
+    app.state.saver = await cm.__aenter__()
+    try:
+        yield
+    finally:
+        await cm.__aexit__(None, None, None)
+
+
+app = FastAPI(title="supply-chain-pomdp", lifespan=lifespan)
+
+
+# No-build frontend: tell browsers to always revalidate static assets so a
+# JS/CSS/HTML edit lands on the next load instead of being masked by a stale
+# module cache. etag/last-modified still make unchanged files a cheap 304.
+# ponytail: blanket no-cache is fine here -- this server is the dev/demo host,
+# not a CDN; switch to hashed filenames if it ever needs real cache lifetimes.
+@app.middleware("http")
+async def _no_cache_static(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 episodes: dict[str, World] = {}
@@ -40,9 +83,17 @@ class ResetResponse(BaseModel):
     obs: dict
 
 
+class ContractAction(BaseModel):
+    action: str            # sign|switch|renew|lapse
+    supplier: str          # canonical or anon supplier id
+    terms: str | None = None  # negotiation menu key: short|long|strict|lenient
+
+
 class ActionRequest(BaseModel):
     qty: Literal[0, 20, 40]
     route: str | None = None  # vocabulary depends on episode semantics
+    supplier: str | None = None  # qualified|spot|backup (or anon source_*)
+    contract: ContractAction | None = None  # sign/renew/switch/lapse a contract
 
 
 class StepResponse(BaseModel):
@@ -80,8 +131,8 @@ def buy_briefing(episode_id: str) -> BriefingResponse:
     world = _get(episode_id)
     if world.done:
         raise HTTPException(status.HTTP_409_CONFLICT, "episode is done")
-    return BriefingResponse(briefing=world.request_briefing(),
-                            cost=world.cfg.briefing_cost)
+    r = svc_briefing(world)
+    return BriefingResponse(briefing=r["briefing"], cost=r["cost"])
 
 
 @app.post("/episodes/{episode_id}/step", response_model=StepResponse)
@@ -89,14 +140,26 @@ def step_episode(episode_id: str, action: ActionRequest) -> StepResponse:
     world = _get(episode_id)
     if world.done:
         raise HTTPException(status.HTTP_409_CONFLICT, "episode is done")
-    route = None
+    route = supplier = None
     if action.qty:
         route = ROUTE_PARSE[world.cfg.semantics].get(action.route or "")
         if route is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 f"unknown route {action.route!r} for this episode")
-    obs, cost, done, _info = world.step({"qty": action.qty, "route": route})
-    return StepResponse(obs=obs, cost=cost, done=done)
+        supplier = SUPPLIER_PARSE[world.cfg.semantics].get(action.supplier or "")
+        if supplier is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"unknown supplier {action.supplier!r} for this episode")
+    contract = None
+    if action.contract is not None:
+        csup = SUPPLIER_PARSE[world.cfg.semantics].get(action.contract.supplier)
+        if csup is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                f"unknown contract supplier {action.contract.supplier!r}")
+        contract = {"action": action.contract.action, "supplier": csup,
+                    "terms": action.contract.terms}
+    r = svc_step(world, action.qty, route, supplier, contract)
+    return StepResponse(obs=r["obs"], cost=r["cost"], done=r["done"])
 
 
 @app.get("/episodes/{episode_id}/trace")
@@ -162,6 +225,85 @@ def benchmark(seed: int) -> JSONResponse:
             "luck_premium": causal - clairvoyant, "plan": rows,
         }
     return JSONResponse(content=_bench["per_seed"][seed])
+
+
+# ----------------------------------------------------------------------
+# Agent harness: run/stream/advance/log. One deepagents session plays a
+# whole 26-week episode; its reasoning, tool calls, and results stream out
+# over SSE. Two modes (autonomous / step_gated) and true resume by run_id
+# (the agent's messages live in the sqlite checkpointer entered at lifespan;
+# the World is pickled by the runner under the same id). Registered BEFORE
+# the static mount so these routes win.
+# ----------------------------------------------------------------------
+
+from fastapi.responses import StreamingResponse
+from langgraph.types import Command
+
+from src.agent.runner import AgentRun, stream as agent_stream, KICKOFF
+from src.agent.factory import build_agent
+from src.agent.tools import make_tools
+
+agent_runs: dict[str, AgentRun] = {}
+
+
+class AgentRunRequest(BaseModel):
+    seed: int
+    model: str
+    mode: Literal["autonomous", "step_gated"] = "autonomous"
+    semantics: Literal["real", "anon"] = "real"
+
+
+def _build_agent_for(run: AgentRun):
+    tools = make_tools(run)
+    return build_agent(run.model_slug, run.mode, tools, app.state.saver)
+
+
+@app.post("/agent/runs", status_code=status.HTTP_201_CREATED)
+def create_agent_run(req: AgentRunRequest) -> dict:
+    run_id = uuid4().hex
+    run = AgentRun(run_id, req.seed, req.model, req.mode, req.semantics)
+    agent_runs[run_id] = run
+    return {"run_id": run_id, "seed": req.seed, "model": req.model,
+            "mode": req.mode, "semantics": req.semantics}
+
+
+@app.get("/agent/runs/{run_id}/stream")
+def stream_agent_run(run_id: str) -> StreamingResponse:
+    run = agent_runs.get(run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown run")
+    if run.active:
+        raise HTTPException(status.HTTP_409_CONFLICT, "run already streaming")
+    # First connect kicks off the episode; a reconnect after a drop resumes
+    # from the last checkpoint (kickoff=None). The agent is built INSIDE the
+    # stream so a build failure (missing key) becomes an error event, not a 500.
+    kickoff = KICKOFF if not run.recorder else None
+    return StreamingResponse(
+        agent_stream(run, lambda: _build_agent_for(run), kickoff),
+        media_type="text/event-stream")
+
+
+@app.post("/agent/runs/{run_id}/advance")
+def advance_agent_run(run_id: str) -> StreamingResponse:
+    run = agent_runs.get(run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown run")
+    if run.mode != "step_gated":
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "advance only applies to step_gated runs")
+    cmd = Command(resume={"decisions": [{"type": "approve"}]})
+    return StreamingResponse(
+        agent_stream(run, lambda: _build_agent_for(run), cmd),
+        media_type="text/event-stream")
+
+
+@app.get("/agent/runs/{run_id}/log")
+def agent_run_log(run_id: str) -> dict:
+    run = agent_runs.get(run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown run")
+    return {"run_id": run_id, "seed": run.seed, "model": run.model_slug,
+            "mode": run.mode, "events": run.recorder}
 
 
 # Serve the Three.js frontend (if present) from the same origin. Mounted
