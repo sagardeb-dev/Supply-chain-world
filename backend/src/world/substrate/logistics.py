@@ -92,8 +92,13 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
         "stockout": cfg.stockout_cost * shortfall,
         "couple": couple,
     }
-    if demurrage:
-        costs["demurrage"] = demurrage  # port held arrivals (rich world only)
-    if rework:
-        costs["rework"] = rework        # quality defects (rich world only)
+    # Emit these keys whenever the MODULE is active (its effect key is present),
+    # NOT only when the value is nonzero -- otherwise the mere presence/absence of
+    # a cost line is a clean boolean readout of the hidden port/quality state
+    # (a side channel that bypasses the noisy emission). In the default 2-factor
+    # world neither effect key is present, so the cost_breakdown is byte-identical.
+    if "port_blocked" in eff:
+        costs["demurrage"] = demurrage  # 0.0 unless the port held arrivals
+    if "defect_fraction" in eff:
+        costs["rework"] = rework        # 0.0 unless a defective batch landed
     return arrived, costs

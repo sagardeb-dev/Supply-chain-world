@@ -6,7 +6,6 @@ shortfall) and incur rework. A pure reward coupling, so the belief stays
 factored."""
 
 from ...config import WorldConfig
-from .config import QUALITY_DEFECT
 from .factor import QualityState
 
 
@@ -16,9 +15,12 @@ def emit(q: QualityState, cfg: WorldConfig) -> dict:
 
 
 def effect(q: QualityState, cfg: WorldConfig) -> dict:
-    """Substrate effect: the true defective FRACTION of arriving units (don't
-    stock + rework) by the hidden regime. The one place quality touches cost."""
-    return {"defect_fraction": QUALITY_DEFECT[q.regime],
+    """Substrate effect: this week's NOISY realized batch defect fraction (a
+    finite-batch sample around the regime's true rate). round(gross*frac) is a
+    noisy defective count, so the agent cannot read the hidden regime off the
+    arrived/rework delta -- it must filter it like every other channel. The one
+    place quality touches cost."""
+    return {"defect_fraction": q.realized_defect,
             "rework_rate": cfg.quality_rework_cost}
 
 

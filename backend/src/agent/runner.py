@@ -36,13 +36,16 @@ class AgentRun:
     JSONL log on disk so a run can be inspected after the fact."""
 
     def __init__(self, run_id: str, seed: int, model_slug: str, mode: str,
-                 semantics: str = "real"):
+                 semantics: str = "real", registry=None):
         self.run_id = run_id
         self.seed = seed
         self.model_slug = model_slug
         self.mode = mode
         self.semantics = semantics
-        self.world = World(WorldConfig(semantics=semantics))
+        # registry=None -> default 2-factor world; pass registry=RICH for the
+        # full six-module world. The choice lives in the pickled World, so
+        # resume restores the same registry with no extra bookkeeping.
+        self.world = World(WorldConfig(semantics=semantics), registry=registry)
         self.world.reset(seed)
         self.recorder: list[dict] = []
         self.active = False  # guards against a double stream on reconnect
@@ -95,7 +98,10 @@ async def stream(run: AgentRun, build_agent_fn, kickoff):
     resume from the last checkpoint, or a Command(resume=...) to release a
     step-gate. Demuxes ["updates","messages"] into thought / tool_call /
     tool_result / interrupt / done / error. Persists the World after each step."""
-    config = {"configurable": {"thread_id": run.run_id}}
+    # recursion_limit guards a full 26-week episode: each week costs several
+    # graph super-steps (reason -> tool_call -> tool_result), so the LangGraph
+    # default of 25 halts the run around week ~12. 200 clears the horizon.
+    config = {"configurable": {"thread_id": run.run_id}, "recursion_limit": 200}
     if kickoff is None:
         agent_input = None
     elif isinstance(kickoff, Command):

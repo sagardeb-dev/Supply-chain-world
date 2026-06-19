@@ -110,6 +110,12 @@ class WorldConfig:
     q_drift_recover: float = 0.20          # drifting -> in_control (caught early)
     q_out_recover: float = 0.25            # out_of_control -> in_control (intervention)
     quality_rework_cost: float = 15.0      # rework/scrap cost per defective unit
+    # The realized batch defect FRACTION is a NOISY draw around the regime mean
+    # (a finite-batch sample, not the exact process rate), so the defective count
+    # the agent sees is a noisy estimate of the hidden regime -- it cannot read
+    # the regime off the arrived/rework delta. Gamma multiplier, mean 1.0,
+    # CV = 1/sqrt(shape); shape 2.0 -> CV ~0.71 (adjacent regimes overlap).
+    q_defect_shape: float = 2.0
 
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam

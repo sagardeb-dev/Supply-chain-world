@@ -1742,3 +1742,42 @@ def test_rich_six_factor_world_deterministic():
                          o["berth_wait"], round(c, 4)))
         return rows
     assert run(5) == run(5)
+
+
+# --- anti-leak: the cost/arrival side channels must NOT exactly reveal the regime
+
+def test_quality_realized_defect_is_a_noisy_sample_not_an_exact_regime_readout():
+    """Root-cause-#1 fix: the realized batch defect fraction is a NOISY finite-
+    batch sample around the regime mean, so a fixed regime yields a RANGE of
+    defective counts -- arrived/rework no longer invert to the regime exactly."""
+    import random
+    from src.world.modules.quality import QualityState, step_quality
+    rng = random.Random(1)
+    fr = [nq.realized_defect for _ in range(3000)
+          if (nq := step_quality(QualityState("out_of_control", 2), rng, CFG)
+              ).regime == "out_of_control"]
+    assert len(fr) > 200
+    counts = sorted({round(40 * f) for f in fr})       # defective count on a 40-batch
+    assert len(counts) >= 3 and counts[0] != counts[-1]  # noisy, not a 1:1 readout
+
+
+def test_quality_effect_passes_the_per_week_realized_fraction_not_the_table():
+    from src.world.modules.quality import QualityState, effect
+    q = QualityState("out_of_control", 2, realized_defect=0.075)
+    assert effect(q, CFG)["defect_fraction"] == 0.075  # the realized draw, not 0.06
+
+
+def test_rich_cost_keyset_does_not_leak_hidden_state():
+    """The demurrage/rework keys are emitted EVERY week in RICH (0.0 when inert),
+    so the cost_breakdown key SET is not a boolean readout of the hidden port/
+    quality state. The default 2-factor world emits neither key (byte-identical)."""
+    from src.world.registry import RICH
+    w = World(registry=RICH); w.reset(7)
+    while not w.done:
+        o, _, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+        assert "demurrage" in o["cost_breakdown"]
+        assert "rework" in o["cost_breakdown"]
+    w2 = World(); w2.reset(7)
+    o2, _, _, _ = w2.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+    assert "demurrage" not in o2["cost_breakdown"]
+    assert "rework" not in o2["cost_breakdown"]

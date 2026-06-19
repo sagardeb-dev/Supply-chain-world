@@ -14,7 +14,7 @@ import random
 from dataclasses import dataclass, asdict
 
 from ...config import WorldConfig
-from .config import AQL_BANDS, QUALITY_BAND_PROBS
+from .config import AQL_BANDS, QUALITY_BAND_PROBS, QUALITY_DEFECT
 
 QUALITY_REGIMES = ("in_control", "drifting", "out_of_control")
 
@@ -34,6 +34,8 @@ class QualityState:
     regime: str = "in_control"
     regime_age: int = 0
     sample_band: str = "accept"   # this week's noisy AQL inspection result
+    realized_defect: float = 0.0  # this week's NOISY batch defect fraction (a
+                                  # finite-batch sample around the regime mean)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -44,7 +46,7 @@ def step_quality(q: QualityState, rng: random.Random,
     """Advance the process-quality regime, then draw this week's noisy AQL
     sample. Sibling of step_hidden, same rng. Reads ONLY QualityState. The
     drifting->out hazard rises with age (gradual-then-sudden tool wear). rng
-    order: transition, sample."""
+    order: transition, AQL sample, defect-fraction realization."""
     s, age = q.regime, q.regime_age
     if s == "in_control":
         nxt = "drifting" if rng.random() < cfg.q_drift_onset else "in_control"
@@ -61,5 +63,11 @@ def step_quality(q: QualityState, rng: random.Random,
         nxt = "in_control" if rng.random() < cfg.q_out_recover else "out_of_control"
 
     new_age = 0 if nxt != s else age + 1
+    # the realized batch defect fraction is a NOISY finite-batch sample around the
+    # regime's true rate (Gamma multiplier, mean 1), so round(gross*frac) is a
+    # noisy count -- the agent cannot read the regime off arrived/rework exactly.
+    realized = QUALITY_DEFECT[nxt] * rng.gammavariate(
+        cfg.q_defect_shape, 1.0 / cfg.q_defect_shape)
     return QualityState(regime=nxt, regime_age=new_age,
-                        sample_band=_sample_band(nxt, rng))
+                        sample_band=_sample_band(nxt, rng),
+                        realized_defect=round(realized, 5))
