@@ -57,7 +57,10 @@ disruption template, grounded in real supply-chain data.
   seasonal share the `surge` mean; congestion vs customs-hold share a band).
   `quality` is the strongest case: a noisy *discrete* AQL sample whose belief
   never fully collapses. The agent must **filter** the regime over weeks — no
-  single reading identifies it.
+  single reading identifies it. Its cost channel is matched: the realized batch
+  `defect_fraction` is a noisy finite-batch draw around the regime mean (not the
+  regime's exact rate), so the hidden state can't be inverted from the
+  arrived/rework delta either.
 
 ## The `effect` interface
 
