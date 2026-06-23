@@ -11,3 +11,4 @@ wheels/
 claude-mds/
 # agent run artifacts (logs, world pickles, sqlite checkpoints)
 runs/
+AGENTS.md

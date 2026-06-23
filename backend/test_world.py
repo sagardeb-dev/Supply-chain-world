@@ -588,21 +588,28 @@ def test_agent_tools_gating():
             self.events.append((week, kind))
 
     run = FakeRun()
-    get_week, buy_briefing, place_order = make_tools(run)
+    buy_briefing, place_order = make_tools(run)
 
-    # get_week returns the obs as text; no hidden key leaks
-    txt = get_week.invoke({})
-    import json as _json
-    obs = _json.loads(txt)
-    assert not (HIDDEN_KEYS & obs.keys())
+    # the week-0 obs now reaches the agent via the kickoff message; no leak
+    from src.agent.runner import kickoff_message
+    msg = kickoff_message(run.world)
+    assert not any(k in msg for k in HIDDEN_KEYS)
+
+    # buy_briefing runs and records (regression: a trimmed import once
+    # NameError'd here because buy_briefing fetched the week via svc_observation)
+    out = buy_briefing.invoke({})
+    assert "briefing" in out.lower()
+    assert any(k == "buy_briefing" for _, k in run.events)
 
     # qty>0 with no route raises (no default route)
     with pytest.raises(Exception):
-        place_order.invoke({"qty": 20, "supplier": "qualified", "route": ""})
+        place_order.invoke({"rationale": "t", "qty": 20,
+                            "supplier": "qualified", "route": ""})
 
     # a valid order advances the world one week and records the event
     before = run.world.week
-    out = place_order.invoke({"qty": 20, "supplier": "qualified", "route": "suez"})
+    out = place_order.invoke({"rationale": "stock up, lane calm", "qty": 20,
+                              "supplier": "qualified", "route": "suez"})
     assert run.world.week == before + 1
     assert "Order placed" in out
     assert any(k == "place_order" for _, k in run.events)
@@ -697,7 +704,7 @@ def _parse_sse(frames):
 def test_place_order_event_carries_obs(tmp_path, monkeypatch):
     """The place_order tool_result SSE frame carries the post-step structured
     obs (obs/cost/done/week) read from the recorder tail, while a
-    non-place_order tool_result (get_week) carries no obs. No LLM."""
+    non-place_order tool_result (buy_briefing) carries no obs. No LLM."""
     import asyncio
     import src.agent.runner as runnermod
     monkeypatch.setattr(runnermod, "RUNS_DIR", tmp_path)
@@ -708,16 +715,17 @@ def test_place_order_event_carries_obs(tmp_path, monkeypatch):
     # a real run + a genuine place_order event in the recorder
     run = AgentRun("po-run", seed=3, model_slug="x", mode="autonomous",
                    semantics="real")
-    get_week, buy_briefing, place_order = make_tools(run)
-    place_order.invoke({"qty": 20, "supplier": "qualified", "route": "suez"})
+    buy_briefing, place_order = make_tools(run)
+    place_order.invoke({"rationale": "stock up, lane calm", "qty": 20,
+                        "supplier": "qualified", "route": "suez"})
     assert run.recorder and run.recorder[-1]["kind"] == "place_order"
 
-    # a scripted agent that emits a get_week tool_result then a place_order
+    # a scripted agent that emits a buy_briefing tool_result then a place_order
     # tool_result, AFTER the recorder already holds the place_order event
     class FakeAgent:
         async def astream(self, agent_input, config, stream_mode=None):
             yield ("updates", {"tools": {"messages": [
-                ToolMessage(content="situation report", name="get_week",
+                ToolMessage(content="situation report", name="buy_briefing",
                             tool_call_id="g1")]}})
             yield ("updates", {"tools": {"messages": [
                 ToolMessage(content="Order placed", name="place_order",
@@ -730,7 +738,7 @@ def test_place_order_event_carries_obs(tmp_path, monkeypatch):
     results = [(ev, data) for ev, data in frames if ev == "tool_result"]
 
     by_name = {data["name"]: data for _, data in results}
-    assert "place_order" in by_name and "get_week" in by_name
+    assert "place_order" in by_name and "buy_briefing" in by_name
 
     po = by_name["place_order"]
     for key in ("obs", "cost", "done", "week"):
@@ -743,7 +751,7 @@ def test_place_order_event_carries_obs(tmp_path, monkeypatch):
     assert po["week"] == tail["week"]
 
     # a non-place_order tool_result carries no world update
-    gw = by_name["get_week"]
+    gw = by_name["buy_briefing"]
     assert "obs" not in gw and "cost" not in gw
 
 
@@ -1589,6 +1597,49 @@ def test_rich_world_freight_deterministic_and_varies():
             w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
             bands.add(w.module_states["freight"].band)
     assert {"jump", "high", "peak", "low"} <= bands
+
+
+def test_freight_lock_pins_rate_until_window_expires():
+    """lock_freight is a within-week action (no advance) that FIXES the freight
+    multiplier for `weeks` weeks: every locked week pays the locked rate even as
+    the spot draw moves, then the window clears."""
+    from src.world.registry import RICH
+    w = World(registry=RICH); w.reset(3)
+    locked = w.lock_freight(3)["rate"]
+    assert w.week == 0                              # within-week: does not advance
+    expected = 20 * (CFG.suez_unit_cost * locked + CFG.qualified_premium)
+    drawn = []
+    for _ in range(3):
+        o, _, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+        assert o["cost_breakdown"]["shipping"] == pytest.approx(expected)
+        drawn.append(w.module_states["freight"].realized_mult)
+    # the lock truly OVERRODE a different spot (not a coincidence of equal draws)
+    assert any(abs(d - locked) > 0.01 for d in drawn)
+    # window expired -> lock cleared, rate floats again
+    assert w.books.freight_lock is None
+    o, _, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+    assert "freight_lock" not in o
+    floated = 20 * (CFG.suez_unit_cost * w.module_states["freight"].realized_mult
+                    + CFG.qualified_premium)
+    assert o["cost_breakdown"]["shipping"] == pytest.approx(floated)
+
+
+def test_lock_freight_tool_only_in_rich_world():
+    """lock_freight exists only where a freight market does; the 2-factor world
+    keeps the two-tool surface (and the oracle never sees a lock)."""
+    from src.agent.tools import make_tools
+    from src.world.registry import RICH
+
+    class FakeRun:
+        def __init__(self, registry):
+            self.world = World(registry=registry); self.world.reset(3)
+        def record(self, *a):
+            pass
+
+    base = [t.name for t in make_tools(FakeRun(None))]
+    rich = [t.name for t in make_tools(FakeRun(RICH))]
+    assert base == ["buy_briefing", "place_order"]
+    assert "lock_freight" in rich
 
 
 # --- module 5: port/customs (lead-time + demurrage effect; RICH only) ------

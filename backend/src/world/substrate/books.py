@@ -38,6 +38,16 @@ class Shipment:
                 "status": self.status, "eta": self.eta(cfg)}
 
 
+@dataclass
+class FreightLock:
+    """A forward freight buy: the multiplier is FIXED at `rate` for the next
+    `weeks_left` weeks, regardless of the realized spot. Observed commercial
+    state (no hidden dimension); decremented per week in engine.step (an unused
+    window still burns - the commitment teeth)."""
+    rate: float
+    weeks_left: int
+
+
 class Books:
     def __init__(self, inventory: int):
         self.inventory = inventory
@@ -45,6 +55,7 @@ class Books:
         self.contracts = []  # list[Contract]; an INSTANCE list, so holding two
                              # live contracts at once (dual-sourcing, R6) is legal
                              # by data shape, not a special case.
+        self.freight_lock = None  # FreightLock | None: a live forward freight buy
 
 
 def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> float:

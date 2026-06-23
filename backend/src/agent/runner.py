@@ -19,12 +19,20 @@ from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.types import Command
 
 from src.world import World, WorldConfig
+from .service import svc_observation
 
 RUNS_DIR = Path("runs")
 
-KICKOFF = ("Begin. You are at week 0. Read the situation with get_week, then "
-           "run the full 26-week episode, placing exactly one order each week "
-           "until the episode reports done.")
+
+def kickoff_message(world) -> str:
+    """The first user message: kicks off the run AND carries the week-0
+    situation report. There is no get_week tool to fetch it -- a stateful agent
+    holds every later obs from place_order, so only week 0 needs delivering."""
+    obs = svc_observation(world)  # week 0: the trace tail right after reset
+    return ("Begin. You are at week 0. Below is this week's situation report; "
+            "run the full 26-week episode, placing exactly one order each week "
+            "until the episode reports done.\n\nWeek 0 situation:\n"
+            + json.dumps(obs, indent=2))
 
 
 def _sse(event: str, data: dict) -> str:

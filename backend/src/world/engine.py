@@ -11,7 +11,7 @@ from .modules.disruption import HiddenState, analyst_briefing
 from .modules.supplier import (Contract, SUPPLIER_DISPLAY, SUPPLIERS,
                                SupplierState, TERM_MENU, contract_open,
                                terms_for)
-from .substrate import Books, resolve_week
+from .substrate import Books, FreightLock, resolve_week
 from .substrate.semantics import ROUTE_DISPLAY, STATUS_DISPLAY
 from .registry import REGISTRY
 
@@ -66,6 +66,7 @@ class World:
         self._briefing = None  # paid assessment bought at this decision point
         obs = self._build_obs(arrived=0, costs={})
         self.trace.append({"week": 0, "hidden": self.hidden.to_dict(),
+                           "hidden_states": self._hidden_full(),
                            "action": None, "obs": obs, "cost": 0.0})
         return obs
 
@@ -79,6 +80,22 @@ class World:
         if self._briefing is None:
             self._briefing = analyst_briefing(self.hidden, self.cfg)
         return self._briefing
+
+    def lock_freight(self, weeks: int) -> dict:
+        """Forward-buy this week's freight rate: FIX the cost multiplier at the
+        current observable rate for `weeks` weeks. A within-week action (does
+        NOT advance, like request_briefing) - captured BEFORE the world steps so
+        a lock placed this week prices this week's order. Only meaningful when a
+        freight market exists (rich worlds)."""
+        if self.done:
+            raise RuntimeError("episode is done; call reset()")
+        if weeks < 1:
+            raise ValueError("weeks must be >= 1")
+        rate = self._effects().get("freight_mult")
+        if rate is None:
+            raise ValueError("no freight market to lock in this world")
+        self.books.freight_lock = FreightLock(rate, weeks)
+        return {"rate": rate, "weeks_left": weeks}
 
     def _new_contract(self, supplier: str, start: int, terms: str | None = None):
         """Mint a contract from a negotiation-menu selection (R5). Defaults to
@@ -190,10 +207,21 @@ class World:
 
         self.week += 1
         self._advance_modules()
+        # a live freight lock OVERRIDES this week's realized rate (you pay the
+        # locked rate, up or down), then its window decrements -- per week, even
+        # if you do not ship (an unused lock still burns).
+        eff = self._effects()
+        lock = self.books.freight_lock
+        if lock:
+            eff["freight_mult"] = lock.rate
         arrived, costs = resolve_week(
             self.books, qty, supplier if qty else None,
             route if qty else None, self.hidden, self.suppliers["spot"],
-            self.week, self.cfg, effects=self._effects())
+            self.week, self.cfg, effects=eff)
+        if lock:
+            lock.weeks_left -= 1
+            if lock.weeks_left <= 0:
+                self.books.freight_lock = None
         if briefed:
             costs["briefing"] = self.cfg.briefing_cost
         # Lever 3: carrying >=2 live contracts costs a weekly overhead. Counted
@@ -210,10 +238,12 @@ class World:
         obs = self._build_obs(arrived=arrived, costs=costs)
         info = {"hidden": self.hidden.to_dict()}  # for replay/oracle, never the agent
         self.trace.append({"week": self.week, "hidden": info["hidden"],
+                           "hidden_states": self._hidden_full(),
                            "action": {"qty": qty, "route": route if qty else None,
                                       "supplier": supplier if qty else None,
                                       "contract": action.get("contract"),
-                                      "briefing": briefed},
+                                      "briefing": briefed,
+                                      "freight_locked": bool(lock)},
                            "obs": obs, "cost": cost})
         return obs, cost, self.done, info
 
@@ -231,6 +261,9 @@ class World:
             "contract_open": self._open_supplier_ids(),  # the auto-renewal prompt
             "term_menu": list(TERM_MENU),  # the negotiation options (R5)
         }
+        if self.books.freight_lock:  # the agent's own forward freight buy (observed)
+            obs["freight_lock"] = {"rate": self.books.freight_lock.rate,
+                                   "weeks_left": self.books.freight_lock.weeks_left}
         view = {}
         for m in self.registry:
             obs.update(m.emit(self._module_state(m), self.cfg))
@@ -249,6 +282,23 @@ class World:
         """The live state a module's emit reads: its entry in module_states
         (a singleton state, or the roster dict)."""
         return self.module_states[m.id]
+
+    def _hidden_full(self) -> dict:
+        """Every module's hidden state for the trace tape / x-ray. The
+        disruption slice also stays under trace['hidden'] for the oracle's
+        replay reader; this is the complete picture (supplier roster + any rich
+        factors) the agent never sees but a debugger wants. ponytail: additive
+        -- the existing 'hidden' key is untouched."""
+        out = {}
+        for m in self.registry:
+            st = self.module_states[m.id]
+            if st is None:
+                continue
+            if isinstance(st, dict):  # a roster module (supplier): {sid: state}
+                out[m.id] = {sid: s.to_dict() for sid, s in st.items()}
+            else:
+                out[m.id] = st.to_dict()
+        return out
 
     def _effects(self):
         """Merge every module's substrate effect (demand units, freight mult,

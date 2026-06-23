@@ -40,7 +40,8 @@ def ask_order(world) -> dict:
         if qty == 0:
             return {"qty": 0}
         if len(parts) == 2 and parts[1] in ("s", "c") and qty in (20, 40):
-            return {"qty": qty, "route": "suez" if parts[1] == "s" else "cape"}
+            return {"qty": qty, "route": "suez" if parts[1] == "s" else "cape",
+                    "supplier": "qualified"}
         print("  ? qty must be 0/20/40 with route s or c")
 
 
@@ -48,7 +49,8 @@ def base_stock_action(world, target: int = 80) -> dict:
     position = world.books.inventory + sum(s.qty for s in world.books.pipeline)
     deficit = target - position
     qty = 0 if deficit <= 0 else (20 if deficit <= 20 else 40)
-    return {"qty": qty, "route": "suez"} if qty else {"qty": 0}
+    return ({"qty": qty, "route": "suez", "supplier": "qualified"} if qty
+            else {"qty": 0})
 
 
 def main():
@@ -68,7 +70,7 @@ def main():
         elif args.policy == "basestock":
             action = base_stock_action(world)
         else:
-            action = {"qty": 20, "route": args.policy}
+            action = {"qty": 20, "route": args.policy, "supplier": "qualified"}
         obs, cost, done, info = world.step(action)
         print(fmt_obs(obs))
 

@@ -16,6 +16,14 @@ def svc_briefing(world) -> dict:
     return {"briefing": world.request_briefing(), "cost": world.cfg.briefing_cost}
 
 
+def svc_lock(world, weeks: int) -> dict:
+    """Forward-buy the current freight rate for `weeks` weeks. A within-week
+    action (does not advance). Mirrors svc_briefing; the engine validates."""
+    if world.done:
+        raise RuntimeError("episode is done")
+    return world.lock_freight(weeks)
+
+
 def svc_step(world, qty: int, route: str | None,
              supplier: str | None = None, contract: dict | None = None) -> dict:
     """Commit this week's order (and optional contract sub-action) and advance

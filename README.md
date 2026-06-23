@@ -1,67 +1,98 @@
 # supply-chain-pomdp
 
-A factored partially-observable supply-chain benchmark with an **exact causal
-oracle** as its anchor. You run a procurement desk on the Asia–Europe shipping
-lane for 26 weeks: keep ~20 units/week flowing, decide how to route and who to
-source from, and pay for intel only when it is worth it. Two hidden generators
-drive the world — a shipping-lane disruption chain and a supplier-reliability
-chain — and the benchmark measures how much of the optimal (oracle) value an
-agent captures, and where its reasoning breaks.
+A partially-observable supply-chain decision problem with an exactly-computable
+optimum. You run a procurement desk on the Asia–Europe shipping lane for 26
+weeks: order stock, choose a shipping route and a supplier, and decide when
+paid intelligence is worth buying. Hidden processes — a shipping-lane
+disruption chain and a supplier-reliability chain — evolve underneath and leak
+only indirect signals. The benchmark scores how close an agent's total cost
+comes to the optimal policy's, and where its inference breaks down.
 
 A FastAPI backend serves both the world API and a static Three.js frontend on
 the same origin. No Node build step.
 
----
+## Why it exists
 
-## What makes it a benchmark, not a toy
+Most agent benchmarks can only rank policies against each other or against a
+human baseline — the *optimum is unknown*, so "how far from best-possible was
+this?" has no answer. This world is built so that answer is computable.
 
-- **Factored POMDP, exact oracle.** Two independent latent chains (lane
-  disruption + spot-supplier reliability) couple to the agent *only through
-  cost*. That keeps the belief factorized, so the optimal policy is computed by
-  an **exact finite-horizon belief-MDP expectimax** (no approximation). The
-  oracle value is the score everything is measured against. Adding a factor is
-  +1 marginal, not a rewrite.
-- **Noiseless emissions, real ambiguity.** Observations are deterministic
-  functions of hidden state with a deliberate 1-week ambiguity band (e.g. a
-  transit-count crash that could be a false alarm, a grounding, or a war).
-  The agent's job is inference under that ambiguity, not denoising.
-- **Calibrated to the real world.** Voyage lengths, divert penalties, crisis
-  transit counts, unit costs, supplier-bankruptcy hazards — every magnitude
-  traces to a cited real anchor (2021 Suez obstruction, 2023–2026 Red Sea
-  crisis, UNCTAD/IMF PortWatch, supplier-failure statistics). See
-  `backend/V1_CHANGE_LOG.md`.
+The hidden factors are independent in their dynamics and their signals, and
+couple to the agent only through cost. Under those conditions the optimal
+partially-observed policy is an exact finite-horizon dynamic program over the
+agent's belief — no sampling, no function approximation. So an agent's score
+has an absolute meaning (dollars above the best achievable under the same
+uncertainty), and the gap decomposes cleanly:
 
-## The two hidden factors
+- **regret vs the causal oracle** — pure skill deficit. The oracle saw exactly
+  the same observations; anything extra the agent paid is its own inference
+  error.
+- **causal − clairvoyant** — the *luck premium* of the seed: what an agent who
+  could see the future would have saved over the best non-clairvoyant policy.
+  This is the irreducible part, charged to the draw, not the player.
 
-1. **Lane disruption** — a semi-Markov chain over calm / watch / disruption
-   (short grounding vs long war) / recovery. Drives transit counts on Suez,
-   Bab-el-Mandeb, and the Cape. You route via Suez (~3 wk, cheaper) or around
-   the Cape (~4 wk, dearer), and may buy a $30 briefing to disambiguate.
-2. **Supplier reliability** — a semi-Markov chain over reliable / wobbling /
-   degraded / **defunct** for the spot supplier, surfaced as an OTIF
-   scorecard. A degraded supplier can ship short — or die for good.
+## How a week works
 
-## Suppliers, contracts, and emergence
+Each week you choose an order quantity (`0`, `20`, or `40` units), and if you
+order, a route and a supplier. You may also manage supplier contracts, and you
+may pay $30 for a briefing that disambiguates the lane state before you commit.
+Then the week resolves: latent factors advance, ships sail and the ones that
+reach a chokepoint that week are routed or delayed, arrivals stock inventory,
+demand (≈20 units/week) is served, and costs total up. You then see the new
+observation — never the hidden state — and decide again.
 
-Three suppliers — **Incumbent** (qualified: reliable, dearer, evergreen
-contract), **Spot** (cheaper, drifts, can ship short or collapse), **Backup**
-(mid-tier, 1-week onboarding). Sourcing is per-*contract*, not per-order: you
-sign a contract (with negotiable term length and clauses), and you can only
-source a supplier you hold a live contract with.
+Routing is a real trade-off. Suez is ~3 weeks and cheaper; the Cape is ~4 weeks
+and dearer. A Suez ship that meets the canal during a closure waits a week and
+then diverts around the Cape, billed at the Cape rate — so ordering into Suez
+during a known crisis is not a free reroute.
 
-The interesting mechanics are not hand-coded scenarios — they **emerge** from
-three authored primitives:
+## The hidden factors
 
-| Lever | What is authored | What emerges |
-|---|---|---|
-| Generative primitive | a per-week hazard a degraded supplier goes `defunct` | unscheduled supplier collapses, no scripted week |
-| Standing rule | a *condition*: a contract is "open" iff expired **or** its supplier is not alive | when a sourced supplier dies, its contract auto-opens and a renewal prompt fires — nothing references the collapse primitive |
-| Cost gradient | a weekly overhead for carrying ≥2 live contracts | dual-sourcing-under-volatility appears as the agent's optimal hedge |
+The default world has two latent factors. Both are semi-Markov regimes
+(state plus age) whose observations are *noiseless* functions of the regime,
+with a deliberate one-week onset ambiguity — the agent's job is inference under
+that ambiguity, not denoising.
 
-The discipline that makes this work: **never write a rule against a date or a
-named scenario — only against a condition, a probability, or a cost.**
+1. **Lane disruption** — calm / watch / disruption (a short grounding or a long
+   war) / recovery / false alarm. Drives the transit counts you observe on
+   Suez, Bab-el-Mandeb, and the Cape, plus a trade-press bulletin. The crash
+   week is genuinely ambiguous: a count collapse could be a false alarm, a
+   grounding, or a war, and only resolves over subsequent weeks.
+2. **Supplier reliability** — a per-supplier OTIF chain (reliable / wobbling /
+   degraded / defunct) for the spot supplier, surfaced as a scorecard. A
+   degraded supplier can ship short, or fail for good.
 
----
+A larger six-factor world (`RICH`) adds demand, freight-rate, port-congestion,
+and quality factors, these with *noisy* emissions (a quality regime, for
+instance, never fully reveals itself from a single AQL sample — it must be
+filtered over weeks). The default two-factor world is kept byte-identical to
+its original arithmetic, which is what keeps the oracle's pinned value stable;
+the rich factors are additive and inert when absent. See
+`backend/src/world/README.md`.
+
+## Suppliers and contracts
+
+Three suppliers: an incumbent (reliable, dearer, evergreen contract), a spot
+supplier (cheaper, drifts, can ship short or collapse), and a mid-tier backup
+with a one-week onboarding lag. Sourcing is per-contract, not per-order — you
+hold a contract (with a negotiable term length and clauses) and can only source
+a supplier you currently have a live contract with.
+
+The contract behaviour is written against conditions, not scripted events. A
+contract is "open" *iff* it has expired or its supplier is no longer alive; a
+weekly overhead is charged for carrying two or more live contracts. From those
+two rules, a sourced supplier's collapse auto-opens its contract and prompts a
+renewal, and dual-sourcing emerges as the hedge under volatility — without any
+code referencing a specific week or a named scenario.
+
+## Calibration
+
+Magnitudes trace to cited real-world anchors rather than being chosen for feel:
+voyage lengths, divert penalties, crisis transit counts, unit costs, and
+supplier-failure hazards are pinned to the 2021 Suez obstruction, the 2023–2026
+Red Sea crisis, UNCTAD/IMF PortWatch data, and published supplier-bankruptcy
+statistics. Each magnitude and its source is recorded in
+`backend/V1_CHANGE_LOG.md`.
 
 ## Quick start
 
@@ -71,12 +102,12 @@ From the repo root:
     uv sync
     uv run uvicorn src.api.app:app --host 0.0.0.0 --port 9000
 
-Open <http://localhost:9000>. The backend serves the frontend on the same
+Open <http://localhost:9000>. The backend serves the frontend from the same
 origin — there is no separate frontend server.
 
-In the UI you can **play** the desk yourself or **watch an LLM agent** play.
-Toggle **research mode** to reveal the hidden tape (x-ray) live; it is off for
-benchmark runs.
+In the UI you can play the desk yourself or watch an LLM agent play. Toggle
+research mode to reveal the hidden tape (x-ray) live; it is off for benchmark
+runs.
 
 ## Development
 
@@ -90,8 +121,8 @@ Regression suite (single file, fast subset):
     cd backend
     uv run pytest test_world.py -q
 
-The two slow oracle tests run the full ~122 s exact solve; include them for the
-oracle gate, deselect them for fast iteration:
+Two tests run the full exact solve (~122 s). Include them for the oracle gate;
+deselect them for fast iteration:
 
     uv run pytest test_world.py -q -k "not causal_oracle_within_bounds and not benchmark_endpoint"
 
@@ -115,20 +146,27 @@ dependency, `three`, is loaded from a CDN via an import map in
 ## Repository layout
 
     backend/
-      src/world/      world engine, factored kernels, emissions, contracts
-      src/world/causal_oracle.py   exact belief-MDP expectimax (the anchor)
-      src/agent/      LLM agent harness (deepagents, OpenRouter, SSE)
-      src/api/        FastAPI app (serves the world API + the frontend)
-      test_world.py   the single regression file (engine, oracle, API pins)
-      V1_CHANGE_LOG.md   every design decision, with real-world evidence
-      claude-mds/     architecture, dependency graph, sequence-of-* design docs
-    frontend/         static JS/CSS/Three.js UI served by FastAPI
+      src/world/             the factored-POMDP world
+        engine.py            World: the reset()/step() orchestrator
+        registry.py          composes modules into the default and RICH worlds
+        config.py            global scalar knobs
+        modules/             Tier 1 — the latent factors, each a sealed box
+        substrate/           Tier 2 — module-agnostic ships/inventory/logistics
+        couplings.py         Tier 3 — the only code that reads two factors (in cost)
+        oracle/              clairvoyant + exact causal oracle (the anchors)
+      src/agent/             LLM agent harness (deepagents, OpenRouter, SSE)
+      src/api/               FastAPI app (serves the world API + the frontend)
+      test_world.py          the single regression file (engine, oracle, API pins)
+      V1_CHANGE_LOG.md       design decisions, each with its real-world anchor
+      claude-mds/            architecture and design notes
+    frontend/                static JS/CSS/Three.js UI served by FastAPI
 
 ## Where to read next
 
+- `backend/src/world/README.md` — the world's three-tier design and the factored
+  structure that keeps the oracle exact.
+- `backend/src/world/oracle/README.md` — the clairvoyant and causal oracles, and
+  what regret against each one measures.
+- `backend/src/world/modules/README.md` — the six latent factors and how a module
+  stays a sealed box.
 - `backend/V1_CHANGE_LOG.md` — design decisions and calibration evidence.
-- `backend/claude-mds/architecture.md` — the two-factor framing.
-- `backend/claude-mds/sequence-of-ideas/003-factored-world-and-per-factor-oracles.md`
-  — why the factored oracle stays exact.
-- `backend/claude-mds/sequence-of-changes/004-supplier-roster-contracts.md`
-  — the supplier roster, contracts, and the three levers.
