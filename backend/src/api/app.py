@@ -239,7 +239,7 @@ def benchmark(seed: int) -> JSONResponse:
 from fastapi.responses import StreamingResponse
 from langgraph.types import Command
 
-from src.agent.runner import AgentRun, stream as agent_stream, KICKOFF
+from src.agent.runner import AgentRun, stream as agent_stream, kickoff_message
 from src.agent.factory import build_agent
 from src.agent.tools import make_tools
 
@@ -277,7 +277,7 @@ def stream_agent_run(run_id: str) -> StreamingResponse:
     # First connect kicks off the episode; a reconnect after a drop resumes
     # from the last checkpoint (kickoff=None). The agent is built INSIDE the
     # stream so a build failure (missing key) becomes an error event, not a 500.
-    kickoff = KICKOFF if not run.recorder else None
+    kickoff = kickoff_message(run.world) if not run.recorder else None
     return StreamingResponse(
         agent_stream(run, lambda: _build_agent_for(run), kickoff),
         media_type="text/event-stream")
