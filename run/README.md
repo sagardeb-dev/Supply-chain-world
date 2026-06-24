@@ -96,15 +96,27 @@ Total cost over 26 weeks (lower is better), six-factor world, `temperature=0`,
 post the required-`rationale` change. Same seed = same hidden tape across all
 models, so columns are directly comparable.
 
-<!-- SCORES_TABLE -->
+| model | seed 8 | seed 19 |
+|---|---|---|
+| `gpt-5` | **$6,779** | **$6,676** |
+| `gpt-5.1` | $7,505 | $8,225 |
+| `gpt-5.2` | $8,446 | $7,882 |
+| `gpt-5.4` | $7,645 | $8,937 |
 
 What these runs show, read honestly:
 
-- **The seed dominates the ranking among capable models.** The four models land
-  within a few hundred dollars of each other and their order flips between seed 8
-  and seed 19. The benchmark cleanly separates *can-play* from *can't* (a weaker
-  model that violates the contract rules or runs lean into the stockout cluster
-  does much worse), but it does **not** reliably rank *good* against *great*.
+- **The score does not track capability.** The base `gpt-5` is the cheapest on
+  *both* seeds, and the more capable `gpt-5.1/5.2/5.4` are all worse — capability
+  anti-correlates with cost here. The benchmark separates *can-play* from *can't*
+  (a model that violates the contract rules or runs lean into the stockout cluster
+  does much worse), but among capable models it is not measuring skill.
+- **Requiring a written rationale every week raised costs.** These post-fix runs
+  are all dearer than the same models scored before `rationale` was mandatory
+  (e.g. `gpt-5.1` on seed 8: $6,261 → $7,505). Forcing per-week articulation seems
+  to nudge the stronger models into *more* active management — contract churn,
+  route fiddling — that costs money. That is itself a finding about the task: more
+  deliberation is not rewarded, so the prompt and the world, not the model, are
+  the binding constraints.
 - **Most of the controllable cost is one decision.** A counterfactual sweep shows
   the large, foresight-knowing optimum comes mostly from carrying more buffer in
   the calm weeks *before* a disruption is visible — a bet against an unseen
