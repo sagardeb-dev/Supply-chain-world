@@ -29,8 +29,9 @@ order, manage a contract, or both.
 week -- your demand/inventory position, the lane/disruption risk, freight, \
 sourcing -- and why this qty/route/supplier. The world does not advance \
 without it.
-  - qty in {0, 20, 40}. 0 = order nothing (no route/supplier needed). \
-20 = one shipment; 40 = two.
+  - qty: any whole number of units to order this week, from 0 up to 100 (about \
+five weeks of demand). 0 = order nothing (no route/supplier needed). There is no \
+fixed menu -- size qty to lift your inventory_position to the buffer you want.
   - route "suez" or "cape" (required if qty > 0):
     - "suez": base 4/unit, faster (~3 weeks), but the Suez/Red Sea corridor \
 can be disrupted -- a ship caught at the canal during a disruption waits, then \
@@ -115,6 +116,10 @@ them over several weeks, never trust a single reading)
 - week, inventory, arrived, and pipeline (your in-flight shipments with \
 estimated arrival weeks; an ETA that slips week-over-week is itself a signal a \
 corridor or port is degrading).
+- inventory_position and on_order: on_order is the total units already ordered \
+but not yet arrived (your pipeline); inventory_position = inventory on hand + \
+on_order. This is your order-up-to decision variable -- order enough to lift \
+inventory_position to a level that covers demand over the order lead time.
 - LANE: suez_count, bab_count, cape_count (ships that transited the Suez \
 Canal, the Bab-el-Mandeb strait, and the Cape this week) plus a trade-press \
 bulletin. When the Suez/Bab counts collapse and Cape rises, the corridor is in \

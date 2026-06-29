@@ -285,7 +285,7 @@ def main():
     ap.add_argument("--policy", choices=["suez", "cape", "basestock"],
                     help="run a fixed policy instead of the LLM (no model needed)")
     ap.add_argument("--rich", action="store_true",
-                    help="six-factor RICH world (default: two-factor)")
+                    help="six-factor RICH world (default: CORE 3-factor)")
     ap.add_argument("--mode", choices=["autonomous", "step_gated"],
                     default="autonomous")
     ap.add_argument("--semantics", choices=["real", "anon"], default="real")

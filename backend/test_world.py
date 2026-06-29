@@ -1848,6 +1848,8 @@ def test_prompt_reframes_buffer_and_default_supplier():
     from src.agent.prompt import build_system_prompt
     w = World(WorldConfig(), registry=CORE); w.reset(7)
     p = build_system_prompt(w)
+    assert "{0, 20, 40}" not in p                        # old qty menu gone
+    assert "inventory_position" in p                     # sizing variable described
     assert "do not carry a big buffer" not in p          # anti-buffer steer gone
     assert "95%" in p                                    # service target stated
     assert "lock_freight(weeks)" not in p                # freight lever stripped (CORE)
