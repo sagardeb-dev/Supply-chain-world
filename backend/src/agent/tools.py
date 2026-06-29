@@ -63,7 +63,8 @@ def make_tools(run):
         and sourcing, and say why this qty/route/supplier (and any contract).
         The week does not advance without it; it is your visible thinking.
 
-        Ordering: qty must be 0, 20, or 40. If qty > 0 you MUST pass route
+        Ordering: qty is a whole number of units (0 means order nothing; the
+        cap is order_max). If qty > 0 you MUST pass route
         ("suez" or "cape") and supplier ("qualified", "spot", or "backup").
         You may only source a supplier you hold a LIVE contract with (see
         `contracts` / `contract_open` in the weekly report).

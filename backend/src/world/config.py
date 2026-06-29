@@ -140,7 +140,8 @@ class WorldConfig:
 
     # --- demand & costs ---
     weekly_demand: int = 20
-    order_quantities: tuple = (0, 20, 40)  # no order / one ship / two ships
+    order_max: int = 100  # free order-qty cap; ~5 weeks of mean demand, generous
+                          # enough not to bind a sane base-stock. Calibration knob.
     initial_inventory: int = 80
     suez_unit_cost: float = 4.0
     cape_unit_cost: float = 6.0           # ~1.5x Suez operating cost

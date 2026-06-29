@@ -267,10 +267,24 @@ def test_step_validation():
     world = World()
     world.reset(1)
     with pytest.raises(ValueError):
-        world.step({"qty": 30, "route": "suez"})
+        world.step({"qty": -5, "route": "suez", "supplier": "qualified"})
     with pytest.raises(ValueError):
         world.step({"qty": 20})  # qty > 0 needs a route
     world.step({"qty": 0})       # no route needed
+
+
+def test_free_quantity_accepts_and_bounds():
+    """Order qty is a free non-negative integer capped at order_max -- the
+    {0,20,40} menu is gone; off-grid quantities are legal, out-of-range raise."""
+    world = World()
+    world.reset(1)
+    world.step({"qty": 30, "route": "suez", "supplier": "qualified"})  # off-grid: legal now
+    assert world.books.pipeline[-1].qty == 30
+    with pytest.raises(ValueError):
+        world.step({"qty": -5, "route": "suez", "supplier": "qualified"})
+    with pytest.raises(ValueError):
+        world.step({"qty": world.cfg.order_max + 1, "route": "suez",
+                    "supplier": "qualified"})
 
 
 def test_bulletin_present_and_matches_regime():
@@ -462,7 +476,7 @@ def test_resolve_rel_mirrors_resolve_week():
         h = HiddenState()
         for week in range(1, CFG.horizon_weeks + 1):
             h = step_hidden(h, rng, CFG)
-            qty = rng.choice(CFG.order_quantities)
+            qty = rng.choice((0, 20, 40))
             route = rng.choice(("suez", "cape")) if qty else None
             arrived, costs = resolve_week(books, qty,
                                           "qualified" if qty else None,

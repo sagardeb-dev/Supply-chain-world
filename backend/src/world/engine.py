@@ -207,8 +207,8 @@ class World:
             self._apply_contract_action(action["contract"])
 
         qty = action["qty"]
-        if qty not in self.cfg.order_quantities:
-            raise ValueError(f"qty must be one of {self.cfg.order_quantities}")
+        if not (0 <= qty <= self.cfg.order_max):
+            raise ValueError(f"qty must be in 0..{self.cfg.order_max}, got {qty}")
         route = action.get("route")
         if qty and route not in ("suez", "cape"):
             raise ValueError(f"qty {qty} needs route suez or cape, got {route!r}")

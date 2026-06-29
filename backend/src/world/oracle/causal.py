@@ -201,7 +201,7 @@ class CausalOracle:
         self.cfg = cfg or WorldConfig()
         cfg = self.cfg
         H = cfg.horizon_weeks
-        self._orders = [(0, None)] + [(q, r) for q in cfg.order_quantities
+        self._orders = [(0, None)] + [(q, r) for q in (0, 20, 40)
                                       if q for r in ("suez", "cape")]
         orders = self._orders
 

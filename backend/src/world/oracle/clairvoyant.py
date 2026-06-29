@@ -70,7 +70,7 @@ def optimal_plan_for(trajectory: list[HiddenState], cfg: WorldConfig):
     H = len(trajectory)
     arr = {(r, t): arrival_week(r, t, trajectory, cfg)
            for r in ("suez", "cape") for t in range(1, H + 1)}
-    actions = [(0, None)] + [(q, r) for q in cfg.order_quantities if q
+    actions = [(0, None)] + [(q, r) for q in (0, 20, 40) if q
                              for r in ("suez", "cape")]
 
     @lru_cache(maxsize=None)

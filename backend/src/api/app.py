@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.world import World, WorldConfig
 from src.world.oracle import CausalOracle, causal_play
@@ -90,10 +90,10 @@ class ContractAction(BaseModel):
 
 
 class ActionRequest(BaseModel):
-    qty: Literal[0, 20, 40]
+    qty: int = Field(ge=0)   # free non-negative qty; engine enforces the order_max cap
     route: str | None = None  # vocabulary depends on episode semantics
     supplier: str | None = None  # qualified|spot|backup (or anon source_*)
-    contract: ContractAction | None = None  # sign/renew/switch/lapse a contract
+    contract: ContractAction | None = None  # sign/switch/renew/lapse a contract
 
 
 class StepResponse(BaseModel):
