@@ -1925,3 +1925,19 @@ def test_core_registry_runs_stochastic_demand():
         assert not (HIDDEN_KEYS & obs.keys())   # regime stays hidden
         pos.append(obs["pos_units"])
     assert len(set(pos)) > 1                     # stochastic, not the flat constant
+
+
+def test_inventory_position_and_fill_rate():
+    """inventory_position = on_hand + on_order (lost-sales, no backorders); the
+    run-level fill_rate = served/demanded is well-formed."""
+    from src.world.registry import CORE
+    w = World(WorldConfig(), registry=CORE)
+    obs = w.reset(7)
+    assert obs["inventory_position"] == obs["inventory"] + obs["on_order"] == 80
+    while not w.done:
+        obs, *_ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+        on_order = sum(s["qty"] for s in obs["pipeline"])
+        assert obs["on_order"] == on_order
+        assert obs["inventory_position"] == obs["inventory"] + on_order
+    assert 0.0 <= w.fill_rate <= 1.0
+    assert w.demand_total > 0 and w.served_total <= w.demand_total

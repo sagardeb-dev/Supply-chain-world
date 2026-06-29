@@ -47,6 +47,11 @@ class World:
     def suppliers(self, value):
         self.module_states["supplier"] = value
 
+    @property
+    def fill_rate(self) -> float:
+        """Served / demanded across the run so far (1.0 before any demand)."""
+        return 1.0 if self.demand_total == 0 else self.served_total / self.demand_total
+
     def reset(self, seed: int) -> dict:
         self.rng = random.Random(seed)
         self.week = 0
@@ -72,6 +77,8 @@ class World:
             break_fee=self.cfg.contract_break_fee)]
         self.done = False
         self.total_cost = 0.0
+        self.served_total = 0      # units served across the run (for fill rate)
+        self.demand_total = 0      # units demanded across the run
         self.trace = []
         self._briefing = None  # paid assessment bought at this decision point
         self._audit = None     # paid supplier audit (masked task), same pattern
@@ -246,6 +253,12 @@ class World:
             lock.weeks_left -= 1
             if lock.weeks_left <= 0:
                 self.books.freight_lock = None
+        # fill rate (lost-sales): demand is eff["demand"] in a demand world,
+        # else the constant; unmet units = stockout cost / unit stockout cost.
+        dem = eff.get("demand", self.cfg.weekly_demand)
+        shortfall = round(costs.get("stockout", 0.0) / self.cfg.stockout_cost)
+        self.demand_total += dem
+        self.served_total += dem - shortfall
         if briefed:
             costs["briefing"] = self.cfg.briefing_cost
         if audited:
@@ -286,6 +299,9 @@ class World:
         obs = {
             "week": self.week,
             "inventory": self.books.inventory,
+            "on_order": sum(s.qty for s in self.books.pipeline),
+            "inventory_position": (self.books.inventory
+                                   + sum(s.qty for s in self.books.pipeline)),
             "arrived": arrived,
             "pipeline": [self._display_shipment(s) for s in self.books.pipeline],
             "cost_breakdown": dict(costs),
