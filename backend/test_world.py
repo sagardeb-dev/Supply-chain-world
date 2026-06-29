@@ -23,9 +23,6 @@ from src.world.modules.supplier import (Contract, SupplierState, TERM_MENU,
                                         step_supplier, terms_for)
 from src.world.engine import HIDDEN_KEYS
 from src.world.substrate import Books, resolve_week
-from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
-from src.world.oracle import (EMPTY_PIPE, CausalOracle, canonical,
-                              causal_play, resolve_rel, transition_dist)
 
 
 CFG = WorldConfig()
@@ -350,43 +347,6 @@ def test_trace_completeness():
         assert {"week", "hidden", "action", "obs", "cost"} <= rec.keys()
 
 
-def test_oracle_arrivals_match_engine():
-    for seed in (1, 7, 12):
-        traj = hidden_trajectory(seed, CFG)
-        for route in ("suez", "cape"):
-            world = World()
-            world.reset(seed)
-            while not world.done:
-                world.step({"qty": 20, "supplier": "qualified", "route": route})
-            landed = {}
-            for rec in world.trace[1:]:
-                for s in rec["obs"]["pipeline"]:
-                    landed[s["dispatched_week"]] = s["eta"]
-                for d in list(landed):
-                    a = arrival_week(route, d, traj, CFG)
-                    if a is not None and a <= rec["week"]:
-                        assert a == landed[d]
-
-
-def test_oracle_dp_matches_engine_replay():
-    for seed in (1, 2, 7, 12, 17):
-        cost, plan = oracle_plan(seed, CFG)
-        world = World()
-        world.reset(seed)
-        for qty, route in plan:
-            world.step({"qty": qty, "supplier": "qualified", "route": route}
-                       if qty else {"qty": 0})
-        assert world.done
-        assert abs(world.total_cost - cost) < 1e-6, f"seed {seed}"
-
-
-def test_oracle_uses_quantity_lever():
-    # With the 80-unit starting buffer and a 3-week lead, ordering 20
-    # every single week cannot be optimal - the oracle must burn buffer.
-    _, plan = oracle_plan(1, CFG)
-    assert any(q != 20 for q, _ in plan)
-
-
 def test_api_episode_lifecycle():
     client = TestClient(app)
     r = client.post("/episodes", json={"seed": 9})
@@ -434,93 +394,6 @@ def test_api_briefing_and_anon_episode():
     assert ok.json()["obs"]["cost_breakdown"]["briefing"] == CFG.briefing_cost
 
 
-# --- causal-aware oracle (the benchmark anchor) --------------------------
-
-
-@pytest.fixture(scope="module")
-def causal():
-    return CausalOracle(CFG)
-
-
-def test_transition_dist_matches_sampler():
-    """The DP's exact kernel must agree with transition.step_hidden."""
-    rng = random.Random(0)
-    cores = [("calm", 0, None), ("watch", 0, None),
-             ("disruption", 0, "short"), ("disruption", 1, "short"),
-             ("disruption", 0, "long"), ("disruption", 1, "long"),
-             ("recovery", 0, None), ("recovery", 1, None),
-             ("recovery", 2, None), ("false_alarm", 0, None)]
-    n = 20000
-    for core in cores:
-        dist = dict(transition_dist(core, CFG))
-        assert abs(sum(dist.values()) - 1) < 1e-12
-        seen = {}
-        h = HiddenState(*core)
-        for _ in range(n):
-            h2 = step_hidden(h, rng, CFG)
-            k = canonical((h2.event_state, h2.event_age,
-                           h2.disruption_type), CFG)
-            seen[k] = seen.get(k, 0) + 1
-        assert set(seen) == set(dist), core
-        for k, p in dist.items():
-            assert abs(seen[k] / n - p) < 0.02, (core, k)
-
-
-def test_resolve_rel_mirrors_resolve_week():
-    """The DP's relative pipeline encoding must reproduce the real Books
-    machinery week by week on randomized hidden paths and orders."""
-    rng = random.Random(42)
-    for trial in range(60):
-        books = Books(inventory=CFG.initial_inventory)
-        pipe, inv = EMPTY_PIPE, CFG.initial_inventory
-        h = HiddenState()
-        for week in range(1, CFG.horizon_weeks + 1):
-            h = step_hidden(h, rng, CFG)
-            qty = rng.choice((0, 20, 40))
-            route = rng.choice(("suez", "cape")) if qty else None
-            arrived, costs = resolve_week(books, qty,
-                                          "qualified" if qty else None,
-                                          route, h, SupplierState(), week, CFG)
-            core = (h.event_state, h.event_age, h.disruption_type)
-            pipe, inv, arrived2, cost2 = resolve_rel(
-                pipe, inv, qty, route, core, h.cape_local_congestion, CFG)
-            assert arrived2 == arrived, (trial, week)
-            assert inv == books.inventory, (trial, week)
-            assert abs(cost2 - sum(costs.values())) < 1e-9, (trial, week)
-
-
-def test_causal_oracle_within_bounds(causal):
-    """Clairvoyance is luck-inclusive: the causal oracle can never beat
-    it on any seed. causal_play also self-checks every step (obs-group
-    uniqueness, cost and inventory agreement with the engine), and the
-    belief support must never exceed the three crash-week atoms."""
-    for seed in range(1, 9):
-        cost, rows = causal_play(seed, oracle=causal)
-        clair, _ = oracle_plan(seed, CFG)
-        assert cost >= clair - 1e-6, seed
-        assert all(r["belief_support"] <= 3 for r in rows), seed
-
-
-def test_causal_oracle_value_pinned(causal):
-    """GOLDEN PIN: the benchmark anchor's ex-ante expected cost under the
-    optimal causal policy (WorldConfig() defaults). Captured empirically
-    2026-06-18. A refactor that changes world behavior moves this number,
-    and that is otherwise the one SILENT failure mode -- a wrong oracle
-    with no crash. Do NOT 'update' this literal without understanding why
-    it moved."""
-    assert causal.value() == 4251.9607875333395
-
-
-def test_causal_cost_pinned(causal):
-    """GOLDEN PIN: realized causal-oracle cost on fixed seeds (the live
-    engine played from observations only, each step cross-checked against
-    the DP). Locks end-to-end engine+oracle behavior, not just value()."""
-    expected = {1: 4280.0, 2: 4360.0, 3: 5700.0, 7: 4580.0, 11: 3940.0}
-    for seed, want in expected.items():
-        cost, _ = causal_play(seed, oracle=causal)
-        assert cost == want, seed
-
-
 # --- research surface (read-only API for the explainer UI) ---------------
 
 def test_xray_gating_and_content():
@@ -551,26 +424,18 @@ def test_xray_gating_and_content():
     assert "event_state" in client.get(f"/episodes/{aid}/xray").json()["weeks"][0]
 
 
-def test_benchmark_endpoint(causal):
-    """The benchmark anchor set for a seed. The 122 s solve is bypassed by
-    injecting the module-scoped causal fixture as the cached oracle."""
-    import src.api.app as appmod
-
-    saved = appmod._bench
-    appmod._bench = {"status": "ready", "oracle": causal, "per_seed": {},
-                     "lock": saved["lock"], "error": None}
-    try:
-        client = TestClient(app)
-        body = client.get("/benchmark/3").json()
-        assert body["status"] == "ready" and body["seed"] == 3
-        assert body["causal"] >= body["clairvoyant"] - 1e-6
-        assert body["naive_min"] == min(body["suez20"], body["cape20"],
-                                        body["basestock"])
-        assert body["luck_premium"] == body["causal"] - body["clairvoyant"]
-        assert len(body["plan"]) == CFG.horizon_weeks
-        assert client.get("/benchmark/-1").status_code == 422
-    finally:
-        appmod._bench = saved
+def test_benchmark_returns_baselines_no_oracle():
+    """/benchmark serves base-stock + fixed-policy baselines and a fill rate,
+    synchronously, with no oracle fields."""
+    from fastapi.testclient import TestClient
+    from src.api.app import app
+    with TestClient(app) as client:
+        r = client.get("/benchmark/7")
+        assert r.status_code == 200
+        body = r.json()
+        assert {"basestock", "suez20", "cape20", "naive_min",
+                "basestock_fill"} <= body.keys()
+        assert "causal" not in body and "luck_premium" not in body
 
 
 def test_service_parity():

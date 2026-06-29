@@ -5,7 +5,6 @@ research_mode episodes only). Route names are translated
 to/from the episode's semantics vocabulary here (R4) - the engine only
 ever sees canonical names."""
 
-import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,12 +22,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from src.world import World, WorldConfig
-from src.world.oracle import CausalOracle, causal_play
-from src.world.oracle import oracle_plan
 from src.world.substrate.semantics import ROUTE_PARSE
 from src.world.modules.supplier import SUPPLIER_PARSE
 from src.agent.service import svc_audit, svc_briefing, svc_step
-from report_oracle import fixed_policy_cost, base_stock_cost
+from report_oracle import fixed_policy_cost, base_stock_cost, drive_base_stock
 
 from contextlib import asynccontextmanager
 
@@ -195,50 +192,20 @@ def episode_xray(episode_id: str) -> dict:
                       for rec in world.trace]}
 
 
-_bench = {"status": "unsolved", "oracle": None, "per_seed": {},
-          "lock": threading.Lock(), "error": None}
-
-
-def _solve_oracle() -> None:
-    try:
-        oracle = CausalOracle(WorldConfig())
-        oracle.value()  # forces the exact solve (~122 s, once per process)
-        _bench["oracle"] = oracle
-        _bench["status"] = "ready"
-    except Exception as exc:  # surfaced as a 500 by the endpoint
-        _bench["error"] = repr(exc)
-        _bench["status"] = "error"
-
-
 @app.get("/benchmark/{seed}")
 def benchmark(seed: int) -> JSONResponse:
     if not (0 <= seed <= 1_000_000_000):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "seed out of range")
-    with _bench["lock"]:
-        if _bench["status"] == "unsolved":
-            _bench["status"] = "solving"
-            threading.Thread(target=_solve_oracle, daemon=True).start()
-    if _bench["status"] == "solving":
-        return JSONResponse(status_code=202, content={"status": "solving"})
-    if _bench["status"] == "error":
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            f"oracle solve failed: {_bench['error']}")
-    if seed not in _bench["per_seed"]:
-        cfg = WorldConfig()
-        clairvoyant, _plan = oracle_plan(seed, cfg)
-        causal, rows = causal_play(seed, cfg, _bench["oracle"])
-        suez20 = fixed_policy_cost(seed, "suez", cfg)
-        cape20 = fixed_policy_cost(seed, "cape", cfg)
-        basestock = base_stock_cost(seed, cfg)
-        _bench["per_seed"][seed] = {
-            "status": "ready", "seed": seed,
-            "clairvoyant": clairvoyant, "causal": causal,
-            "suez20": suez20, "cape20": cape20, "basestock": basestock,
-            "naive_min": min(suez20, cape20, basestock),
-            "luck_premium": causal - clairvoyant, "plan": rows,
-        }
-    return JSONResponse(content=_bench["per_seed"][seed])
+    cfg = WorldConfig(sup_mask_otif=True)   # match the scored CORE+masked world
+    suez20 = fixed_policy_cost(seed, "suez", cfg)
+    cape20 = fixed_policy_cost(seed, "cape", cfg)
+    w = drive_base_stock(seed, cfg)         # single base-stock driver
+    basestock = w.total_cost
+    return JSONResponse(content={
+        "seed": seed, "suez20": suez20, "cape20": cape20,
+        "basestock": basestock, "basestock_fill": round(w.fill_rate, 3),
+        "naive_min": min(suez20, cape20, basestock)})
 
 
 # ----------------------------------------------------------------------
