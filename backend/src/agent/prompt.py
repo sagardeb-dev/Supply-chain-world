@@ -7,6 +7,8 @@ TOLD the structure of each latent factor, exactly as a real desk knows how its
 lane and suppliers behave; it must still INFER the current state from noisy
 weekly signals."""
 
+import re
+
 SYSTEM_PROMPT = """\
 You run the import replenishment desk for a European importer on the \
 Asia-Europe shipping lane. You will run it for 26 weeks. Your one objective \
@@ -96,9 +98,11 @@ COSTS (every number is real; weigh them)
 the freight index (see FREIGHT), paid when you order.
 - holding: 1 per unit per week -- on inventory ON HAND and IN TRANSIT (capital \
 on the water still costs you).
-- stockout: 20 per unit of unmet demand in a week -- by far the heaviest cost. \
-Running out is expensive; but over-ordering bleeds holding every week. Hold \
-enough buffer to survive a disruption, not more.
+- stockout: 20 per unit of unmet demand in a week -- 20x the holding cost, by \
+far the heaviest cost. Because a stockout costs ~20x a unit-week of holding, \
+the economics imply keeping demand satisfied about 95% of weeks: size your \
+safety buffer to cover demand over the order lead time (mean demand x lead, \
+plus a margin for demand swings and delays), not more.
 - surcharge: a Suez ship diverted around the Cape is billed the Cape-vs-Suez \
 difference.
 - demurrage: 2 per held unit per week when the destination port holds your \
@@ -158,8 +162,10 @@ warning and front-loading is where most of the lane savings are.
 and stockouts cost far more than the Cape premium.
 - When a disruption looks like it is ending, a Suez ship may queue and then \
 get through or divert -- weigh waiting against the slip.
-- In quiet weeks keep ordering lean to demand; do not carry a big buffer you \
-pay holding on every week for no reason.
+- Even in quiet weeks keep a safety buffer sized to demand variability over the \
+lead time -- enough that a normal demand swing or a short shipping delay will \
+not stock you out (stockouts cost ~20x holding). Trim it only when demand and \
+the lane are genuinely calm.
 - Watch the freight regime: when the index and outlook signal tightening, \
 lock_freight before a spike to cap your shipping cost; in slack stay on the \
 spot rate. A lock is a bet -- right, it saves a spike; wrong, you overpay vs a \
@@ -190,14 +196,36 @@ def build_system_prompt(world) -> str:
     is gameable by comparing it to its own delivery history; that discovery is
     the measurement). ponytail: targeted edits beat a forked 180-line copy that
     drifts; the trailing assert catches any anchor that stops matching."""
+    present = {m.id for m in world.registry}
+    base = SYSTEM_PROMPT
+    if "freight" not in present:
+        # lock_freight is gated out of make_tools without the freight module --
+        # strip its lever bullet so the prompt never offers a tool the agent
+        # can't call. Short DOTALL anchor (lever start -> "in the report."),
+        # robust to the prompt's backslash line-continuations.
+        stripped = re.sub(r"- lock_freight\(weeks\):.*?in the report\.\n", "",
+                          base, flags=re.DOTALL)
+        assert stripped != base, (
+            "freight-lever anchor stopped matching SYSTEM_PROMPT")
+        base = stripped
+    if not {"freight", "port", "quality"} <= present:
+        # honesty: a CORE/partial world doesn't emit every channel/cost below.
+        base = base.replace(
+            "- cost_breakdown: what last week cost you, by category.",
+            "- cost_breakdown: what last week cost you, by category.\n"
+            "Some channels and levers described above (freight rate-locking, "
+            "PORT, QUALITY) exist only in richer worlds; if a tool isn't "
+            "offered or a channel isn't in your weekly report, it does not "
+            "apply this run.")
     if not world.cfg.sup_mask_otif:
-        return SYSTEM_PROMPT
-    p = SYSTEM_PROMPT
-    p = p.replace(
-        "- lock_freight(weeks): forward-buy",
+        return base
+    p = base
+    audit_anchor = ("- lock_freight(weeks): forward-buy" if "freight" in present
+                    else "- buy_briefing(): pay")
+    p = p.replace(audit_anchor,
         f"- buy_audit(): pay {world.cfg.audit_cost:.0f} for a direct read of "
         "your spot supplier's current reliability state, before you order. "
-        "Optional.\n- lock_freight(weeks): forward-buy")
+        f"Optional.\n{audit_anchor}")
     p = p.replace(
         "You read it off an OTIF scorecard (ontime / slipping / failing / "
         "defunct).",

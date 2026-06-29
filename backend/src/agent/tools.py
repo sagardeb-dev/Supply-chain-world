@@ -16,6 +16,11 @@ from .service import svc_audit, svc_briefing, svc_lock, svc_step
 def make_tools(run):
     """Two tools closed over a run (exposes .world and .record(week,kind,payload))."""
 
+    def _incumbent() -> str:
+        # the supplier you start contracted to (engine.reset): spot in the
+        # masked task, else qualified. Used when place_order omits supplier.
+        return "spot" if run.world.cfg.sup_mask_otif else "qualified"
+
     def _obs_text(obs: dict) -> str:
         # Defensive: the agent must never see hidden state.
         leaked = HIDDEN_KEYS & obs.keys()
@@ -53,7 +58,7 @@ def make_tools(run):
 
     @tool
     def place_order(rationale: str, qty: int, route: str = "",
-                    supplier: str = "qualified", contract_action: str = "",
+                    supplier: str = "", contract_action: str = "",
                     contract_supplier: str = "", contract_terms: str = "") -> str:
         """Commit this week's decision AND/OR manage a supplier contract, then
         advance the world one week. Each week is exactly one call.
@@ -78,11 +83,11 @@ def make_tools(run):
         ordering. Returns the new week's situation report and whether the
         episode is finished."""
         canonical = route if route else None
-        sup = supplier if qty else None
+        sup = (supplier or _incumbent()) if qty else None
         contract = None
         if contract_action:
             contract = {"action": contract_action,
-                        "supplier": contract_supplier or supplier,
+                        "supplier": contract_supplier or sup or _incumbent(),
                         "terms": contract_terms or None}
         r = svc_step(run.world, qty, canonical, sup, contract)  # raises on bad input
         obs = r["obs"]

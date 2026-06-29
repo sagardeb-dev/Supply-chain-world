@@ -1840,3 +1840,24 @@ def test_base_stock_beats_flat_ladder_under_demand():
     bstock = sum(base_stock_cost(s, cfg) for s in seeds) / 10
     flat = sum(fixed_policy_cost(s, "suez", cfg) for s in seeds) / 10
     assert bstock < flat
+
+
+def test_prompt_reframes_buffer_and_default_supplier():
+    """The CORE prompt sizes a buffer toward the implied service target, no
+    longer steers against buffers, and does not offer the freight lever it
+    lacks; an omitted supplier defaults to the incumbent instead of raising."""
+    from src.world.registry import CORE
+    from src.agent.prompt import build_system_prompt
+    w = World(WorldConfig(), registry=CORE); w.reset(7)
+    p = build_system_prompt(w)
+    assert "do not carry a big buffer" not in p          # anti-buffer steer gone
+    assert "95%" in p                                    # service target stated
+    assert "lock_freight(weeks)" not in p                # freight lever stripped (CORE)
+    # default supplier resolves to the incumbent (qualified here) -> no raise
+    class _Run:
+        world = w
+        def record(self, *a, **k): pass
+    from src.agent.tools import make_tools
+    place = next(t for t in make_tools(_Run()) if t.name == "place_order")
+    out = place.invoke({"rationale": "buffer up", "qty": 20, "route": "suez"})
+    assert "supplier=qualified" in out
