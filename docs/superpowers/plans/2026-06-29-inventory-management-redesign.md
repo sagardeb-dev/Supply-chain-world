@@ -322,8 +322,8 @@ git commit -m "feat(world): scored CORE registry (disruption+supplier+demand), m
 def test_inventory_position_and_fill_rate():
     """inventory_position = on_hand + on_order (lost-sales, no backorders); the
     run-level fill_rate = served/demanded is well-formed."""
-    w = World(WorldConfig(), registry=__import__(
-        "src.world.registry", fromlist=["CORE"]).CORE)
+    from src.world.registry import CORE
+    w = World(WorldConfig(), registry=CORE)
     obs = w.reset(7)
     assert obs["inventory_position"] == obs["inventory"] + obs["on_order"] == 80
     while not w.done:
@@ -603,11 +603,13 @@ def _service_level_S(cfg: WorldConfig) -> int:
     return round(mu * lead + z * sigma * (lead ** 0.5))
 
 
-def base_stock_cost(seed: int, cfg: WorldConfig, registry=None) -> float:
-    """Order-up-to-S via Suez/qualified with a FREE quantity -- the textbook
-    base-stock policy a competent non-adaptive planner runs. S is the
-    service-level target from the critical ratio, NOT a hardcoded constant.
-    Migrates to qualified up front (the competent naive play vs a masked spot)."""
+def drive_base_stock(seed: int, cfg: WorldConfig, registry=None):
+    """Run the order-up-to-S base-stock policy to completion and return the
+    driven World (read .total_cost and .fill_rate off it). Order-up-to-S via
+    Suez/qualified with a FREE quantity -- the textbook base-stock policy a
+    competent non-adaptive planner runs; S is the service-level target from the
+    critical ratio, NOT a hardcoded constant. Migrates to qualified up front
+    (the competent naive play vs a masked spot)."""
     w = World(cfg, registry=CORE if registry is None else registry)
     w.reset(seed)
     S = _service_level_S(cfg)
@@ -617,10 +619,14 @@ def base_stock_cost(seed: int, cfg: WorldConfig, registry=None) -> float:
         base = ({"qty": qty, "route": "suez", "supplier": "qualified"}
                 if qty else {"qty": 0})
         w.step(_qualified_action(w, base))
-    return w.total_cost
+    return w
+
+
+def base_stock_cost(seed: int, cfg: WorldConfig, registry=None) -> float:
+    return drive_base_stock(seed, cfg, registry).total_cost
 ```
 
-> Note: `_qualified_action` adds the contract whenever no live qualified contract exists. On a `qty: 0` step it still signs (contracts resolve regardless of qty). Under `masked=False` (the test's `WorldConfig()`), qualified is the evergreen incumbent from week 0, so the helper is a no-op and the comparison is pure inventory sizing.
+> Note: `_qualified_action` adds the contract whenever no live qualified contract exists. On a `qty: 0` step it still signs (contracts resolve regardless of qty). Under `masked=False` (the test's `WorldConfig()`), qualified is the evergreen incumbent from week 0, so the helper is a no-op and the comparison is pure inventory sizing. `drive_base_stock` is the single base-stock driver — `/benchmark` and `report_oracle.main()` reuse it for the fill rate (no duplicated loop).
 
 - [ ] **Step 4: Run the suite**
 
@@ -707,15 +713,8 @@ def main():
     for seed in range(1, 21):
         suez = fixed_policy_cost(seed, "suez", cfg)
         cape = fixed_policy_cost(seed, "cape", cfg)
-        bstock = base_stock_cost(seed, cfg)
-        # fill rate for the base-stock run (re-drive to read it off the world)
-        w = World(cfg, registry=CORE); w.reset(seed)
-        S = _service_level_S(cfg)
-        while not w.done:
-            pos = w.books.inventory + sum(s.qty for s in w.books.pipeline)
-            q = max(0, min(S - pos, cfg.order_max))
-            w.step({"qty": q, "route": "suez", "supplier": "qualified"}
-                   if q else {"qty": 0})
+        w = drive_base_stock(seed, cfg)      # single base-stock driver
+        bstock = w.total_cost
         print(f"{seed:>4} {suez:>8.0f} {cape:>8.0f} {bstock:>8.0f} "
               f"{w.fill_rate:>8.2f} {min(suez, cape, bstock):>9.0f}")
 ```
@@ -740,21 +739,18 @@ def benchmark(seed: int) -> JSONResponse:
     cfg = WorldConfig(sup_mask_otif=True)   # match the scored CORE+masked world
     suez20 = fixed_policy_cost(seed, "suez", cfg)
     cape20 = fixed_policy_cost(seed, "cape", cfg)
-    basestock = base_stock_cost(seed, cfg)
-    # fill rate for the base-stock run
-    from src.world.registry import CORE
-    from report_oracle import _service_level_S
-    w = World(cfg, registry=CORE); w.reset(seed)
-    S = _service_level_S(cfg)
-    while not w.done:
-        pos = w.books.inventory + sum(s.qty for s in w.books.pipeline)
-        q = max(0, min(S - pos, cfg.order_max))
-        w.step({"qty": q, "route": "suez", "supplier": "qualified"}
-               if q else {"qty": 0})
+    w = drive_base_stock(seed, cfg)         # single base-stock driver
+    basestock = w.total_cost
     return JSONResponse(content={
         "seed": seed, "suez20": suez20, "cape20": cape20,
         "basestock": basestock, "basestock_fill": round(w.fill_rate, 3),
         "naive_min": min(suez20, cape20, basestock)})
+```
+
+`app.py:31` — update the `report_oracle` import to bring in `drive_base_stock`:
+
+```python
+from report_oracle import fixed_policy_cost, base_stock_cost, drive_base_stock
 ```
 
 Remove the now-unused `import threading` at `app.py:8` if nothing else uses it (grep `threading` in `app.py` first).
