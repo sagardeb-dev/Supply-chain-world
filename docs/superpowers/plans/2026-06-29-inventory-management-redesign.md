@@ -957,6 +957,22 @@ Verify: `cd backend && grep -rn "demand_units" src/ test_world.py` returns nothi
 
 `tools.py:103` — drop the trailing "(and the oracle never sees it)" from the `lock_freight` gating comment (the oracle is gone).
 
+- [ ] **Step 2b: Routed cleanups (Minor findings from the task reviews)**
+
+These were flagged Minor during Tasks 4/6/7 and deferred here (this is the cleanup task). All are non-behavioral hygiene:
+
+1. `src/world/substrate/logistics.py` — the `resolve_week` `sup` param now receives `None` when `qty == 0` (Task 4). Update the annotation `sup: SupplierState` → `sup: SupplierState | None`.
+2. `src/world/substrate/logistics.py` (docstring ~lines 24-26) — still says "a spot order ships round(qty * fulfilled_fraction) -- a degraded spot order may leave the dock SHORT". Reword to the profile-driven framing, e.g. "a drifting supplier's order ships round(qty * fulfilled_fraction) -- a degraded one may leave the dock SHORT". (Don't say "spot".)
+3. `report_oracle.py` — `replay_cost(seed, plan, cfg)` is now dead (the old oracle `main()` used it; the new one uses `drive_base_stock`). Remove the function. Verify nothing imports it: `cd backend && grep -rn "replay_cost" src/ report_oracle.py test_world.py` → nothing.
+4. `test_world.py` — in `test_benchmark_returns_baselines_no_oracle`, remove the redundant local `from fastapi.testclient import TestClient` / `from src.api.app import app` (both are already module-level imports), and add `"seed"` to the key-subset assertion (`{"seed", "basestock", "suez20", "cape20", "naive_min", "basestock_fill"} <= body.keys()`).
+5. `src/agent/prompt.py` — the honesty-note `.replace()` has no drift guard (unlike the freight-lever strip). Add one so a future reword of the `cost_breakdown` anchor fails loudly:
+   ```python
+       _before = base
+       base = base.replace(
+           "- cost_breakdown: what last week cost you, by category.", ...)
+       assert base != _before, "cost_breakdown honesty-note anchor drifted"
+   ```
+
 - [ ] **Step 3: Full suite + import check**
 
 Run: `cd backend && uv run pytest test_world.py -q`
@@ -977,8 +993,10 @@ Expected: the agent issues free-quantity `place_order` calls (not only 0/20/40) 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/src/world/modules/demand backend/src/agent/factory.py backend/src/agent/tools.py
-git commit -m "chore: drop dead demand_units, fix stale oracle/tool-count comments"
+git add backend/src/world/modules/demand backend/src/agent/factory.py backend/src/agent/tools.py \
+        backend/src/world/substrate/logistics.py backend/report_oracle.py \
+        backend/src/agent/prompt.py backend/test_world.py
+git commit -m "chore: drop dead code (demand_units, replay_cost), fix stale comments + annotations, guard honesty note"
 ```
 
 ---
