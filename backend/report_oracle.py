@@ -66,15 +66,6 @@ def base_stock_cost(seed: int, cfg: WorldConfig, registry=None) -> float:
     return drive_base_stock(seed, cfg, registry).total_cost
 
 
-def replay_cost(seed: int, plan, cfg: WorldConfig) -> float:
-    w = World(cfg)
-    w.reset(seed)
-    for qty, route in plan:
-        w.step({"qty": qty, "route": route, "supplier": "qualified"}
-               if qty else {"qty": 0})
-    return w.total_cost
-
-
 def main():
     cfg = WorldConfig(sup_mask_otif=True)   # match the scored CORE+masked world
     print(f"{'seed':>4} {'suez20':>8} {'cape20':>8} {'bstock':>8} "

@@ -1,6 +1,7 @@
-"""Builds the deepagents agent: an OpenRouter ChatOpenAI model + the three
-world tools + the system prompt. interrupt_on gates place_order in
-step-gated mode. No fallback: a missing OPENROUTER_API_KEY raises loudly."""
+"""Builds the deepagents agent: an OpenRouter ChatOpenAI model + the world
+tools (2–4 depending on which modules are active) + the system prompt.
+interrupt_on gates place_order in step-gated mode. No fallback: a missing
+OPENROUTER_API_KEY raises loudly."""
 
 import os
 

@@ -427,13 +427,11 @@ def test_xray_gating_and_content():
 def test_benchmark_returns_baselines_no_oracle():
     """/benchmark serves base-stock + fixed-policy baselines and a fill rate,
     synchronously, with no oracle fields."""
-    from fastapi.testclient import TestClient
-    from src.api.app import app
     with TestClient(app) as client:
         r = client.get("/benchmark/7")
         assert r.status_code == 200
         body = r.json()
-        assert {"basestock", "suez20", "cape20", "naive_min",
+        assert {"seed", "basestock", "suez20", "cape20", "naive_min",
                 "basestock_fill"} <= body.keys()
         assert "causal" not in body and "luck_premium" not in body
 

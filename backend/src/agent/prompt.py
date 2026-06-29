@@ -210,6 +210,7 @@ def build_system_prompt(world) -> str:
         base = stripped
     if not {"freight", "port", "quality"} <= present:
         # honesty: a CORE/partial world doesn't emit every channel/cost below.
+        _before = base
         base = base.replace(
             "- cost_breakdown: what last week cost you, by category.",
             "- cost_breakdown: what last week cost you, by category.\n"
@@ -217,6 +218,7 @@ def build_system_prompt(world) -> str:
             "PORT, QUALITY) exist only in richer worlds; if a tool isn't "
             "offered or a channel isn't in your weekly report, it does not "
             "apply this run.")
+        assert base != _before, "cost_breakdown honesty-note anchor drifted"
     if not world.cfg.sup_mask_otif:
         return base
     p = base

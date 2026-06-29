@@ -106,7 +106,7 @@ def make_tools(run):
     if run.world.cfg.sup_mask_otif:
         tools.insert(1, buy_audit)
     # lock_freight only exists where a freight market does (rich worlds); in the
-    # 2-factor world there is nothing to lock (and the oracle never sees it).
+    # 2-factor world there is nothing to lock.
     if any(m.id == "freight" for m in run.world.registry):
         tools.append(lock_freight)
     return tools

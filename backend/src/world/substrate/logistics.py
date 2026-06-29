@@ -15,14 +15,14 @@ from .books import Books, Shipment, _advance
 
 
 def resolve_week(books: Books, qty: int, supplier: str | None,
-                 route: str | None, h: HiddenState, sup: SupplierState,
+                 route: str | None, h: HiddenState, sup: SupplierState | None,
                  week: int, cfg: WorldConfig, effects: dict | None = None):
     """Dispatch this week's order (if any), move every in-flight ship one
     week, land arrivals, consume demand. Returns (arrived_qty, cost_breakdown).
 
-    The supplier stage (factor 2) resolves at DISPATCH: a spot order ships
-    round(qty * fulfilled_fraction) -- a degraded spot order may leave the
-    dock SHORT (or not at all). Qualified always ships full. Once at sea the
+    The supplier stage (factor 2) resolves at DISPATCH: a drifting supplier's
+    order ships round(qty * fulfilled_fraction) -- a degraded one may leave
+    the dock SHORT (or not at all). Qualified always ships full. Once at sea the
     voyage stage is untouched: stage 1 (sourcing) output feeds stage 2.
 
     ponytail: PINNED MIRROR of oracle.causal.resolve_rel (the DP's relative-
