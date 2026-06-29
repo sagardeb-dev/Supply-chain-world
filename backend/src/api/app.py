@@ -27,7 +27,7 @@ from src.world.oracle import CausalOracle, causal_play
 from src.world.oracle import oracle_plan
 from src.world.substrate.semantics import ROUTE_PARSE
 from src.world.modules.supplier import SUPPLIER_PARSE
-from src.agent.service import svc_briefing, svc_step
+from src.agent.service import svc_audit, svc_briefing, svc_step
 from report_oracle import fixed_policy_cost, base_stock_cost
 
 from contextlib import asynccontextmanager
@@ -107,6 +107,11 @@ class BriefingResponse(BaseModel):
     cost: float
 
 
+class AuditResponse(BaseModel):
+    audit: str
+    cost: float
+
+
 def _get(episode_id: str) -> World:
     world = episodes.get(episode_id)
     if world is None:
@@ -133,6 +138,15 @@ def buy_briefing(episode_id: str) -> BriefingResponse:
         raise HTTPException(status.HTTP_409_CONFLICT, "episode is done")
     r = svc_briefing(world)
     return BriefingResponse(briefing=r["briefing"], cost=r["cost"])
+
+
+@app.post("/episodes/{episode_id}/audit", response_model=AuditResponse)
+def buy_audit(episode_id: str) -> AuditResponse:
+    world = _get(episode_id)
+    if world.done:
+        raise HTTPException(status.HTTP_409_CONFLICT, "episode is done")
+    r = svc_audit(world)
+    return AuditResponse(audit=r["audit"], cost=r["cost"])
 
 
 @app.post("/episodes/{episode_id}/step", response_model=StepResponse)
@@ -241,6 +255,7 @@ from langgraph.types import Command
 
 from src.agent.runner import AgentRun, stream as agent_stream, kickoff_message
 from src.agent.factory import build_agent
+from src.agent.prompt import build_system_prompt
 from src.agent.tools import make_tools
 
 agent_runs: dict[str, AgentRun] = {}
@@ -255,7 +270,8 @@ class AgentRunRequest(BaseModel):
 
 def _build_agent_for(run: AgentRun):
     tools = make_tools(run)
-    return build_agent(run.model_slug, run.mode, tools, app.state.saver)
+    return build_agent(run.model_slug, run.mode, tools, app.state.saver,
+                       build_system_prompt(run.world))
 
 
 @app.post("/agent/runs", status_code=status.HTTP_201_CREATED)

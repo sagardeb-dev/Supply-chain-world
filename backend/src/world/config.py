@@ -35,6 +35,18 @@ class WorldConfig:
     # 14.5% of disruptions are supplier failures -> a few % per week from
     # degraded gives a realistic 'distressed -> dead' tail. Absorbing.
     sup_defunct_from_degraded: float = 0.06
+    # --- masked-distress task: the spot supplier's OTIF scorecard LAGS its true
+    # reliability (a gameable contractual metric); the timely truth lives in two
+    # noisy "books" channels (realized_fill + realized_lead_slip) and
+    # request_audit() buys a sharpened read of the CURRENT hidden regime. The
+    # skill measured: does the agent mine its own delivery history instead of
+    # trusting the green scorecard. The agent harness turns this ON; the flag
+    # only stays False here so the legacy single-shot supplier tests still run.
+    sup_mask_otif: bool = False
+    audit_cost: float = 25.0              # paid supplier audit; tune vs runs (VOI knob)
+    sup_lead_slip_sd: float = 2.5         # noise sd of the realized-lead-slip sensor
+    sup_fill_sd: float = 0.12             # noise sd of the realized-fill draw (so a
+                                          # single partial fill no longer IDs the regime)
     # --- supplier economics ---
     spot_unit_discount: float = 1.5       # S is 1.5/unit cheaper than Q's lane cost
     qualified_premium: float = 1.0        # Q adds 1.0/unit over the route base cost

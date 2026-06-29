@@ -10,7 +10,7 @@ from .config import WorldConfig
 from .modules.disruption import HiddenState, analyst_briefing
 from .modules.supplier import (Contract, SUPPLIER_DISPLAY, SUPPLIERS,
                                SupplierState, TERM_MENU, contract_open,
-                               terms_for)
+                               supplier_audit, terms_for)
 from .substrate import Books, FreightLock, resolve_week
 from .substrate.semantics import ROUTE_DISPLAY, STATUS_DISPLAY
 from .registry import REGISTRY
@@ -57,13 +57,23 @@ class World:
                    else m.state_cls() if m.state_cls else None)
             for m in self.registry}
         self.books = Books(inventory=self.cfg.initial_inventory)
-        # pre-contracted to the qualified incumbent: you don't start a
-        # supply chain with no supplier. Default length cfg.contract_weeks.
-        self.books.contracts = [self._new_contract("qualified", start=0)]
+        # pre-contracted to the incumbent (evergreen anchor): you don't start a
+        # supply chain with no supplier. Masked task: the incumbent is SPOT --
+        # the supplier whose silent decline the agent must detect from the books
+        # and migrate off (so reading the masked signals actually has a stake).
+        # Legacy: the safe qualified. Both byte-identical in shape; only the
+        # supplier id differs, and the legacy path matches _new_contract exactly.
+        incumbent = "spot" if self.cfg.sup_mask_otif else "qualified"
+        self.books.contracts = [Contract(
+            supplier=incumbent, start_week=0, end_week=None,
+            unit_price=self.cfg.suez_unit_cost,
+            otif_floor=self.cfg.contract_otif_floor,
+            break_fee=self.cfg.contract_break_fee)]
         self.done = False
         self.total_cost = 0.0
         self.trace = []
         self._briefing = None  # paid assessment bought at this decision point
+        self._audit = None     # paid supplier audit (masked task), same pattern
         obs = self._build_obs(arrived=0, costs={})
         self.trace.append({"week": 0, "hidden": self.hidden.to_dict(),
                            "hidden_states": self._hidden_full(),
@@ -80,6 +90,17 @@ class World:
         if self._briefing is None:
             self._briefing = analyst_briefing(self.hidden, self.cfg)
         return self._briefing
+
+    def request_audit(self) -> str:
+        """Paid supplier audit (masked task): a sharpened read of the CURRENT
+        hidden supplier reliability the lagging OTIF scorecard hides. Bought
+        pre-decision like request_briefing; charged once per week (repeat calls
+        return the same text without re-charging)."""
+        if self.done:
+            raise RuntimeError("episode is done; call reset()")
+        if self._audit is None:
+            self._audit = supplier_audit(self.suppliers, self.cfg)
+        return self._audit
 
     def lock_freight(self, weeks: int) -> dict:
         """Forward-buy this week's freight rate: FIX the cost multiplier at the
@@ -204,6 +225,8 @@ class World:
 
         briefed = self._briefing is not None
         self._briefing = None
+        audited = self._audit is not None
+        self._audit = None
 
         self.week += 1
         self._advance_modules()
@@ -224,6 +247,8 @@ class World:
                 self.books.freight_lock = None
         if briefed:
             costs["briefing"] = self.cfg.briefing_cost
+        if audited:
+            costs["audit"] = self.cfg.audit_cost
         # Lever 3: carrying >=2 live contracts costs a weekly overhead. Counted
         # AFTER the kernel step so a contract whose supplier just died this week
         # no longer counts (it is now open).
@@ -236,13 +261,19 @@ class World:
         self.done = self.week >= self.cfg.horizon_weeks
 
         obs = self._build_obs(arrived=arrived, costs=costs)
+        # masked task: the realized fill on THIS week's spot order -- a real,
+        # honest books signal (you ordered, this much actually shipped). Present
+        # only when you sourced the drifting supplier, so it accrues as you buy
+        # from it (history-forced). Observed fact, not a hidden readout.
+        if self.cfg.sup_mask_otif and qty and supplier == "spot":
+            obs["realized_fill"] = self.suppliers["spot"].fulfilled_fraction
         info = {"hidden": self.hidden.to_dict()}  # for replay/oracle, never the agent
         self.trace.append({"week": self.week, "hidden": info["hidden"],
                            "hidden_states": self._hidden_full(),
                            "action": {"qty": qty, "route": route if qty else None,
                                       "supplier": supplier if qty else None,
                                       "contract": action.get("contract"),
-                                      "briefing": briefed,
+                                      "briefing": briefed, "audited": audited,
                                       "freight_locked": bool(lock)},
                            "obs": obs, "cost": cost})
         return obs, cost, self.done, info

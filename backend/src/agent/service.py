@@ -16,6 +16,14 @@ def svc_briefing(world) -> dict:
     return {"briefing": world.request_briefing(), "cost": world.cfg.briefing_cost}
 
 
+def svc_audit(world) -> dict:
+    """Buy the pre-decision supplier audit for the current week (masked task).
+    Charged once per week by the engine; repeat calls return the same text."""
+    if world.done:
+        raise RuntimeError("episode is done")
+    return {"audit": world.request_audit(), "cost": world.cfg.audit_cost}
+
+
 def svc_lock(world, weeks: int) -> dict:
     """Forward-buy the current freight rate for `weeks` weeks. A within-week
     action (does not advance). Mirrors svc_briefing; the engine validates."""

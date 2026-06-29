@@ -10,7 +10,7 @@ import json
 from langchain_core.tools import tool
 
 from src.world.engine import HIDDEN_KEYS
-from .service import svc_briefing, svc_lock, svc_step
+from .service import svc_audit, svc_briefing, svc_lock, svc_step
 
 
 def make_tools(run):
@@ -29,6 +29,14 @@ def make_tools(run):
         r = svc_briefing(run.world)
         run.record(run.world.week, "buy_briefing", r)
         return f"Analyst briefing (cost {r['cost']}): {r['briefing']}"
+
+    @tool
+    def buy_audit() -> str:
+        """Pay for a direct assessment of your spot supplier's CURRENT
+        reliability state, before you commit your order. Optional."""
+        r = svc_audit(run.world)
+        run.record(run.world.week, "buy_audit", r)
+        return f"Supplier audit (cost {r['cost']}): {r['audit']}"
 
     @tool
     def lock_freight(weeks: int) -> str:
@@ -87,6 +95,10 @@ def make_tools(run):
                 f"Week cost {r['cost']}.{tail}\nNew situation:\n{_obs_text(obs)}")
 
     tools = [buy_briefing, place_order]
+    # buy_audit only exists in the masked-distress task, where the OTIF scorecard
+    # lags; in the default world the scorecard is noiseless and an audit is moot.
+    if run.world.cfg.sup_mask_otif:
+        tools.insert(1, buy_audit)
     # lock_freight only exists where a freight market does (rich worlds); in the
     # 2-factor world there is nothing to lock (and the oracle never sees it).
     if any(m.id == "freight" for m in run.world.registry):

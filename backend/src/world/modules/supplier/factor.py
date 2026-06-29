@@ -9,6 +9,7 @@ import random
 from dataclasses import dataclass, asdict
 
 from ...config import WorldConfig
+from .config import SUPPLIER_FILL_MEAN, SUPPLIER_LEAD_SLIP
 
 SUPPLIER_STATES = ("reliable", "wobbling", "degraded", "defunct")
 
@@ -25,6 +26,10 @@ class SupplierState:
 
     rel_state: str = "reliable"
     rel_age: int = 0  # weeks the supplier has been in degraded
+    lead_slip: float = 0.0  # masked task: this week's NOISY realized-lead-slip
+                            # sensor (days). 0 unless cfg.sup_mask_otif drew it.
+    fill_draw: float | None = None  # masked task: this week's NOISY realized fill
+                            # fraction. None => legacy deterministic lookup.
 
     @property
     def regime(self) -> str:
@@ -41,7 +46,12 @@ class SupplierState:
 
     @property
     def fulfilled_fraction(self) -> float:
-        """Share of a spot order this supplier actually ships this week."""
+        """Share of a spot order this supplier actually ships this week. Masked
+        task: a NOISY per-week draw (fill_draw, set by the kernel) so a single
+        partial fill no longer identifies the regime -- it must be filtered.
+        Legacy: the deterministic lookup (fill_draw is None), byte-identical."""
+        if self.fill_draw is not None:
+            return self.fill_draw
         return {"reliable": 1.0, "wobbling": 0.5,
                 "degraded": 0.0, "defunct": 0.0}[self.rel_state]
 
@@ -83,4 +93,14 @@ def step_supplier(sup: SupplierState, rng: random.Random,
             over = (age + 1 >= cfg.sup_max_degraded
                     or rng.random() > cfg.sup_degraded_persist)
             nxt = "reliable" if over else "degraded"
-    return SupplierState(rel_state=nxt, rel_age=0 if nxt != s else age + 1)
+    # masked task ONLY: draw this week's noisy lead-slip sensor. Gated on the
+    # flag so the default world draws no extra rng -> trajectory + golden tests
+    # byte-identical. Drawn last (after the transition) to keep rng order stable.
+    slip, fill = sup.lead_slip, sup.fill_draw
+    if cfg.sup_mask_otif:
+        slip = round(max(0.0, rng.gauss(SUPPLIER_LEAD_SLIP[nxt],
+                                        cfg.sup_lead_slip_sd)), 1)
+        fill = round(min(1.0, max(0.0, rng.gauss(SUPPLIER_FILL_MEAN[nxt],
+                                                 cfg.sup_fill_sd))), 2)
+    return SupplierState(rel_state=nxt, rel_age=0 if nxt != s else age + 1,
+                         lead_slip=slip, fill_draw=fill)

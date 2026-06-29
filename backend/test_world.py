@@ -622,14 +622,16 @@ def test_resume_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(runnermod, "RUNS_DIR", tmp_path)
     from src.agent.runner import AgentRun
 
-    run = AgentRun("test-run", seed=3, model_slug="x", mode="autonomous")
+    run = AgentRun("test-run", seed=3, model_slug="x", mode="autonomous",
+                   masked=False)  # plumbing test: simple qualified-incumbent world
     # advance the World two weeks through the same path the tools use
     run.world.step({"qty": 20, "supplier": "qualified", "route": "suez"})
     run.world.step({"qty": 0, "route": None})
     run.save()
 
     # a reference World driven identically, NOT pickled
-    ref = AgentRun("ref-run", seed=3, model_slug="x", mode="autonomous")
+    ref = AgentRun("ref-run", seed=3, model_slug="x", mode="autonomous",
+                   masked=False)
     ref.world.step({"qty": 20, "supplier": "qualified", "route": "suez"})
     ref.world.step({"qty": 0, "route": None})
 
@@ -663,7 +665,7 @@ def test_agent_sse_mock(monkeypatch):
                             tool_call_id="c1")]}})
 
     monkeypatch.setattr(appmod, "build_agent",
-                        lambda slug, mode, tools, ckpt: FakeAgent())
+                        lambda slug, mode, tools, ckpt, sysprompt=None: FakeAgent())
 
     with TestClient(appmod.app) as client:  # context -> runs lifespan (sqlite saver)
         r = client.post("/agent/runs",
@@ -714,8 +716,8 @@ def test_place_order_event_carries_obs(tmp_path, monkeypatch):
 
     # a real run + a genuine place_order event in the recorder
     run = AgentRun("po-run", seed=3, model_slug="x", mode="autonomous",
-                   semantics="real")
-    buy_briefing, place_order = make_tools(run)
+                   semantics="real", masked=False)  # plumbing: simple world
+    place_order = next(t for t in make_tools(run) if t.name == "place_order")
     place_order.invoke({"rationale": "stock up, lane calm", "qty": 20,
                         "supplier": "qualified", "route": "suez"})
     assert run.recorder and run.recorder[-1]["kind"] == "place_order"
@@ -1832,3 +1834,97 @@ def test_rich_cost_keyset_does_not_leak_hidden_state():
     o2, _, _, _ = w2.step({"qty": 20, "route": "suez", "supplier": "qualified"})
     assert "demurrage" not in o2["cost_breakdown"]
     assert "rework" not in o2["cost_breakdown"]
+
+
+# --- masked-distress supplier task (cfg.sup_mask_otif) -----------------------
+
+MASKED = WorldConfig(sup_mask_otif=True)
+
+
+def _spot_row(rel_state, rel_age=0, lead_slip=0.0, cfg=MASKED):
+    rows = observe_scorecard(
+        {"spot": SupplierState(rel_state, rel_age, lead_slip)}, cfg)["suppliers"]
+    return rows[0]
+
+
+def test_mask_otif_lags_true_regime():
+    """The masked scorecard reads healthier than the truth: a wobble and the
+    onset of degradation both still show 'ontime'; only deep failure surfaces
+    (as a mild 'slipping'), and death always shows. The legacy world is
+    byte-identical (true band, no lead-slip key)."""
+    assert _spot_row("wobbling")["band"] == "ontime"        # a slip reads on-time
+    assert _spot_row("degraded", 0)["band"] == "ontime"     # onset hidden
+    assert _spot_row("degraded", 1)["band"] == "slipping"   # deep fail -> "slip"
+    assert _spot_row("defunct")["band"] == "defunct"        # death always shows
+    assert _spot_row("wobbling", lead_slip=4.2)["realized_lead_slip"] == 4.2
+    legacy = _spot_row("wobbling", cfg=WorldConfig())
+    assert legacy["band"] == "slipping" and legacy["otif"] == 82
+    assert "realized_lead_slip" not in legacy
+
+
+def test_audit_reveals_true_band_and_charges_once():
+    w = World(MASKED); w.reset(7)
+    w.suppliers["spot"] = SupplierState("degraded", 1)   # truly failing
+    txt = w.request_audit()
+    assert "failing" in txt                              # names the TRUE band
+    assert w.request_audit() == txt                      # cached, same week
+    w.step({"qty": 0})
+    assert w.trace[-1]["obs"]["cost_breakdown"].get("audit") == w.cfg.audit_cost
+
+
+def test_realized_fill_present_only_on_spot_order():
+    w = World(MASKED); w.reset(7)        # masked task starts contracted to spot
+    obs, *_ = w.step({"qty": 40, "supplier": "spot", "route": "suez"})
+    assert obs["realized_fill"] == w.suppliers["spot"].fulfilled_fraction
+    obs2, *_ = w.step({"qty": 0})        # absent when you didn't source spot
+    assert "realized_fill" not in obs2
+
+
+def test_masked_fill_is_noisy_not_deterministic():
+    """Masked task: realized fill is a noisy per-week draw, so a single fill no
+    longer pins the regime -- a healthy supplier can have an unlucky (<1.0) week.
+    Legacy keeps the deterministic lookup (reliable==1.0 exactly)."""
+    from src.world.modules.supplier import step_supplier
+    rng = random.Random(3)
+    fills, s = [], SupplierState()
+    for _ in range(60):
+        s = step_supplier(s, rng, MASKED)
+        if s.rel_state == "reliable":
+            fills.append(s.fulfilled_fraction)
+    assert fills, "no reliable weeks sampled"
+    assert any(f < 1.0 for f in fills) and all(0.0 <= f <= 1.0 for f in fills)
+    assert SupplierState("reliable").fulfilled_fraction == 1.0   # legacy exact
+
+
+def test_masked_starts_on_spot_not_qualified():
+    """The masked task inverts the incumbent: you begin contracted to spot
+    (evergreen), and qualified is an opt-in migration target."""
+    w = World(MASKED); w.reset(7)
+    assert w._contracted_suppliers() == {"spot"}
+    # legacy world is unchanged: starts on qualified
+    lw = World(); lw.reset(7)
+    assert lw._contracted_suppliers() == {"qualified"}
+
+
+def test_masked_obs_no_hidden_leak():
+    w = World(MASKED); w.reset(7)
+    obs, *_ = w.step({"qty": 20, "supplier": "spot", "route": "suez"})
+    assert not (HIDDEN_KEYS & obs.keys())                # engine guard holds
+    spot = next(r for r in obs["suppliers"] if "realized_lead_slip" in r)
+    assert "rel_state" not in spot and "rel_age" not in spot  # row carries no regime
+
+
+def test_masked_flag_off_draws_no_extra_rng():
+    """Flag OFF must not perturb the supplier trajectory (no lead-slip draw), so
+    the legacy world stays a function of the seed alone."""
+    legacy = [SupplierState().rel_state]
+    w = World(); w.reset(11)
+    while not w.done:
+        w.step({"qty": 0})
+        legacy.append(w.suppliers["spot"].rel_state)
+    w2 = World(); w2.reset(11)
+    seq = [SupplierState().rel_state]
+    while not w2.done:
+        w2.step({"qty": 0})
+        seq.append(w2.suppliers["spot"].rel_state)
+    assert legacy == seq  # deterministic, unaffected by the masked-task code

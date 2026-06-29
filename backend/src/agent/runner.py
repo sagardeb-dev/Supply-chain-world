@@ -44,16 +44,18 @@ class AgentRun:
     JSONL log on disk so a run can be inspected after the fact."""
 
     def __init__(self, run_id: str, seed: int, model_slug: str, mode: str,
-                 semantics: str = "real", registry=None):
+                 semantics: str = "real", registry=None, masked: bool = True):
         self.run_id = run_id
         self.seed = seed
         self.model_slug = model_slug
         self.mode = mode
         self.semantics = semantics
         # registry=None -> default 2-factor world; pass registry=RICH for the
-        # full six-module world. The choice lives in the pickled World, so
-        # resume restores the same registry with no extra bookkeeping.
-        self.world = World(WorldConfig(semantics=semantics), registry=registry)
+        # full six-module world. masked=True -> the masked-distress supplier task
+        # (the benchmark); the choice lives in the pickled World, so resume
+        # restores the same world with no extra bookkeeping.
+        self.world = World(WorldConfig(semantics=semantics, sup_mask_otif=masked),
+                           registry=registry)
         self.world.reset(seed)
         self.recorder: list[dict] = []
         self.active = False  # guards against a double stream on reconnect

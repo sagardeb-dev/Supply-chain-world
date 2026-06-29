@@ -37,10 +37,12 @@ def run_agent(seed, model, mode, semantics, rich):
     from .runner import AgentRun, kickoff_message
     from .tools import make_tools
     from .factory import build_agent
+    from .prompt import build_system_prompt
 
     run = AgentRun(uuid4().hex, seed, model, mode, semantics,
                    registry=RICH if rich else None)
-    agent = build_agent(model, mode, make_tools(run), MemorySaver())
+    agent = build_agent(model, mode, make_tools(run), MemorySaver(),
+                        build_system_prompt(run.world))
     config = {"configurable": {"thread_id": run.run_id}, "recursion_limit": 200}
     kickoff = {"messages": [{"role": "user", "content": kickoff_message(run.world)}]}
 
@@ -83,6 +85,8 @@ def run_agent(seed, model, mode, semantics, rich):
                     emit(f"       hidden: {_fmt_hidden(rec, rich)}")
                 elif isinstance(m, ToolMessage) and m.name == "buy_briefing":
                     emit("  ANALYST: " + str(m.content))
+                elif isinstance(m, ToolMessage) and m.name == "buy_audit":
+                    emit("  AUDIT: " + str(m.content))
                 elif isinstance(m, ToolMessage) and m.name == "lock_freight":
                     emit("  FREIGHT: " + str(m.content))
     return run.world, "\n".join(log)
@@ -113,7 +117,10 @@ def _msg_text(m) -> str:
 def run_policy(seed, policy, semantics, rich):
     """Drive a fixed policy (no LLM) through the same World/trace -- the
     renderer's runnable check, and a cheap reference run."""
-    world = World(WorldConfig(semantics=semantics), registry=RICH if rich else None)
+    # masked too, so a policy baseline shares the agent's masked trajectory (the
+    # lead-slip rng draw shifts the seed's trajectory vs the legacy world).
+    world = World(WorldConfig(semantics=semantics, sup_mask_otif=True),
+                  registry=RICH if rich else None)
     world.reset(seed)
     while not world.done:
         world.step(_policy_action(policy, world))
@@ -162,6 +169,20 @@ def _fmt_pipe(obs):
                     for s in obs["pipeline"]) or "-"
 
 
+def _fmt_spot(obs):
+    """Masked-task signals on one line: the drifting supplier's displayed
+    OTIF/band (lagging) and the realized books channels (lead-slip sensor +
+    this week's spot fill, if you sourced it). Empty in the legacy world."""
+    rows = obs.get("suppliers") or []
+    spot = next((r for r in rows if "realized_lead_slip" in r), None)
+    if spot is None:
+        return ""
+    fill = obs.get("realized_fill")
+    fill_s = f" fill{fill:.0%}" if fill is not None else ""
+    return (f"  spot[{spot['band']} otif{spot['otif'] if spot['otif'] is not None else '-'}"
+            f" slip{spot['realized_lead_slip']}{fill_s}]")
+
+
 def _regime(hs, factor):
     st = hs.get(factor)
     return st.get("regime", "-") if isinstance(st, dict) else "-"
@@ -174,6 +195,11 @@ def _fmt_hidden(rec, rich):
     if rich:
         s += (f" dem={_regime(hs, 'demand')} frt={_regime(hs, 'freight')}"
               f" prt={_regime(hs, 'port')} qly={_regime(hs, 'quality')}")
+    # masked task: flag the weeks the scorecard hides spot's true distress -- the
+    # crux is whether the agent reads the books on exactly these weeks.
+    row = next((r for r in rec["obs"].get("suppliers", []) if r["id"] == "spot"), {})
+    if row.get("band") == "ontime" and spot in ("wobbling", "degraded"):
+        s += "  <<MASKED: card reads ontime>>"
     return s
 
 
@@ -189,6 +215,7 @@ def render_trace(world, rich):
         if rich:
             line += (f" pos{obs.get('pos_units', '-')}/fc{obs.get('demand_forecast', '-')}"
                      f" frt{obs.get('freight_index', '-')} aql={obs.get('aql_result', '-')}")
+        line += _fmt_spot(obs)
         line += f"  ->  {_fmt_action(rec['action']):26} ${rec['cost']:6.0f} cum${cum:8.0f}"
         print(line)
         print(f"       HID {_fmt_hidden(rec, rich)}")
@@ -205,6 +232,35 @@ def print_summary(world):
     print("by category: " + (line or "-"))
 
 
+def print_supplier_summary(world):
+    """Masked-task scorecard for the run: the reasoning behaviours, not the cost.
+    Did the agent lean on spot, sense via audit, and -- the headline -- how many
+    weeks was the card masking real distress while it kept sourcing spot?"""
+    if not world.cfg.sup_mask_otif:
+        return
+    spot_orders = fill_short = audits = masked_wks = masked_while_spot = 0
+    collapse = None
+    for rec in world.trace:
+        a, obs = rec["action"] or {}, rec["obs"]
+        true = rec["hidden_states"].get("supplier", {}).get("spot", {}).get("rel_state")
+        if true == "defunct" and collapse is None:
+            collapse = rec["week"]
+        row = next((r for r in obs.get("suppliers", []) if r["id"] == "spot"), {})
+        masked = row.get("band") == "ontime" and true in ("wobbling", "degraded")
+        masked_wks += masked
+        if a.get("audited"):
+            audits += 1
+        if a.get("supplier") == "spot" and a.get("qty"):
+            spot_orders += 1
+            fill_short += round(a["qty"] * (1 - obs.get("realized_fill", 1.0)))
+            masked_while_spot += masked
+    print(f"supplier: sourced spot {spot_orders}x (fill short {fill_short}u)  "
+          f"audits {audits} (${audits * world.cfg.audit_cost:.0f})  "
+          f"weeks card MASKED true distress: {masked_wks} "
+          f"({masked_while_spot} while still sourcing spot)  "
+          + (f"spot DIED wk{collapse}" if collapse else "spot survived"))
+
+
 def _obs_summary(obs, rich) -> str:
     """One compact, human line of the visible situation -- not raw JSON."""
     parts = [f"inv {obs['inventory']}", f"Suez {_fmt_counts(obs)}",
@@ -214,7 +270,7 @@ def _obs_summary(obs, rich) -> str:
                   f"freight {obs.get('freight_index', '-')}",
                   f"port {obs.get('berth_wait', '-')}d",
                   f"qual {obs.get('aql_result', '-')}"]
-    return "  ".join(str(p) for p in parts)
+    return "  ".join(str(p) for p in parts) + _fmt_spot(obs)
 
 
 # --- entry ---------------------------------------------------------------
@@ -241,10 +297,12 @@ def main():
         world = run_policy(args.seed, args.policy, args.semantics, args.rich)
         render_trace(world, args.rich)         # no reasoning to show for a policy
         print_summary(world)
+        print_supplier_summary(world)
     else:
         world, chat = run_agent(args.seed, args.model, args.mode,
                                 args.semantics, args.rich)
         print_summary(world)
+        print_supplier_summary(world)
         # persist: the user hit "where's the trace?" twice -- stdout isn't enough
         out = Path("runs") / f"seed{args.seed}-{args.model.replace('/', '-')}.chat.txt"
         out.parent.mkdir(exist_ok=True)

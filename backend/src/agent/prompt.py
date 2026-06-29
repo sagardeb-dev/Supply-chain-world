@@ -179,3 +179,50 @@ until place_order tells you the episode is done. Do NOT ask the human \
 anything. Do NOT stop early. Every week's reasoning goes in the place_order \
 `rationale` so your thinking is always visible.
 """
+
+
+def build_system_prompt(world) -> str:
+    """The system prompt for this world. Default worlds get SYSTEM_PROMPT
+    verbatim; the masked-distress task (cfg.sup_mask_otif) adds the buy_audit
+    lever and reframes the spot supplier so the OTIF scorecard is presented as
+    just the contracted metric alongside the realized books channels -- factual,
+    NOT prescriptive about which to trust (the agent must discover the scorecard
+    is gameable by comparing it to its own delivery history; that discovery is
+    the measurement). ponytail: targeted edits beat a forked 180-line copy that
+    drifts; the trailing assert catches any anchor that stops matching."""
+    if not world.cfg.sup_mask_otif:
+        return SYSTEM_PROMPT
+    p = SYSTEM_PROMPT
+    p = p.replace(
+        "- lock_freight(weeks): forward-buy",
+        f"- buy_audit(): pay {world.cfg.audit_cost:.0f} for a direct read of "
+        "your spot supplier's current reliability state, before you order. "
+        "Optional.\n- lock_freight(weeks): forward-buy")
+    p = p.replace(
+        "You read it off an OTIF scorecard (ontime / slipping / failing / "
+        "defunct).",
+        "Its OTIF scorecard (ontime / slipping / failing / defunct) is the "
+        "contracted on-time metric; you also see your realized experience with "
+        "spot -- realized_fill (how much of an order actually shipped when you "
+        "sourced it) and realized_lead_slip (its reported lead-time this week), "
+        "both noisy week to week. buy_audit gives a direct read of its current "
+        "state.")
+    p = p.replace(
+        "an OTIF scorecard per supplier (band + on-time % + quoted lead).",
+        "an OTIF scorecard per supplier (band + on-time % + quoted lead). For "
+        "spot you also see realized_fill (actual vs ordered, when you sourced "
+        "it) and realized_lead_slip (its reported lead behaviour this week).")
+    # the masked task inverts the incumbent: you START on spot (the supplier that
+    # can quietly fail), and qualified is the deliberate migration target.
+    p = p.replace(
+        "- spot: cheapest -- 1.5/unit BELOW",
+        "- spot (YOUR STARTING INCUMBENT: you begin already contracted to it and "
+        "source it by default): cheapest -- 1.5/unit BELOW")
+    p = p.replace(
+        "Evergreen contract; you start already contracted to it.",
+        "Evergreen contract. In this task you are NOT contracted to qualified at "
+        "the start -- sign it to migrate off spot when you judge spot has turned.")
+    assert all(s in p for s in ("buy_audit()", "realized_fill",
+               "STARTING INCUMBENT", "migrate off spot")), (
+        "build_system_prompt: an anchor stopped matching SYSTEM_PROMPT")
+    return p
