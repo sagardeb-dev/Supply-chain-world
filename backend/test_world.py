@@ -1289,23 +1289,6 @@ def test_hard_gap_defunct_spot_leaves_you_stuck():
     assert "spot" not in w._contracted_suppliers()
 
 
-# --- module contract: the registry declaration (structural refactor) -------
-
-def test_registry_covers_exactly_the_two_factors():
-    """Two latent modules, no more. The iid cape-local coin is a THIRD
-    stochastic root but it lives INSIDE the disruption module's emission
-    (observe_counts), not as its own module -- 'two modules' != 'two
-    stochastic roots'. Pin the count and the ids so a stray module can't
-    sneak in."""
-    from src.world.registry import REGISTRY
-    assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
-    # order is load-bearing (rng draw order = exogeneity); pin it explicitly
-    assert REGISTRY[0].kernel is step_hidden
-    assert REGISTRY[1].kernel is step_supplier
-    # both are noiseless latent factors
-    assert all(m.kind == "latent-factor" for m in REGISTRY)
-
-
 def test_supplier_module_drives_only_drifting_roster_ids():
     """The supplier module advances exactly the roster ids whose profile
     sets drifts=True (only spot in R1), read from SUPPLIERS -- no literal
@@ -1437,15 +1420,6 @@ def test_view_labels_never_leak_real_names_in_anon():
 
 # --- module 3: demand (first goal-2 factor; RICH world only; noisy v2) -----
 
-def test_demand_only_in_rich_registry():
-    """The default world is the pinned 2-factor world; demand appears only in
-    RICH (which also carries later factors) -- never in the default registry."""
-    from src.world.registry import REGISTRY, RICH
-    assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
-    assert "demand" in {m.id for m in RICH}
-    assert "demand" not in {m.id for m in REGISTRY}
-
-
 def test_demand_band_onset_ambiguity():
     """The deliberate 1-week ambiguity (mirrors disruption 'crash'): promo and
     seasonal ONSET (age 0) share the 'surge' MEAN -> indistinguishable in
@@ -1525,14 +1499,6 @@ def test_rich_world_obs_has_forward_forecast_channel():
     from src.world.registry import RICH
     w = World(registry=RICH); obs = w.reset(7)
     assert "pos_units" in obs and "demand_forecast" in obs
-
-
-def test_default_world_demand_inert():
-    """Inert-by-absence: the default world has no demand module, no pos_units,
-    and consumes the constant cfg.weekly_demand."""
-    w = World(); obs = w.reset(3)
-    assert "demand" not in w.module_states
-    assert "pos_units" not in obs
 
 
 # --- module 4: freight (noisy spot rate; cost-multiplier effect; RICH only) -
@@ -1942,3 +1908,20 @@ def test_masked_flag_off_draws_no_extra_rng():
         w2.step({"qty": 0})
         seq.append(w2.suppliers["spot"].rel_state)
     assert legacy == seq  # deterministic, unaffected by the masked-task code
+
+
+def test_core_registry_runs_stochastic_demand():
+    """CORE = (disruption, supplier, demand): the scored world emits a NOISY
+    weekly POS that varies week to week (demand is no longer flat), and never
+    leaks the hidden demand regime."""
+    from src.world.registry import CORE
+    assert [m.id for m in CORE] == ["disruption", "supplier", "demand"]
+    w = World(WorldConfig(), registry=CORE)
+    w.reset(7)
+    pos = []
+    while not w.done:
+        obs, *_ = w.step({"qty": 0})
+        assert "pos_units" in obs               # demand channel is live
+        assert not (HIDDEN_KEYS & obs.keys())   # regime stays hidden
+        pos.append(obs["pos_units"])
+    assert len(set(pos)) > 1                     # stochastic, not the flat constant

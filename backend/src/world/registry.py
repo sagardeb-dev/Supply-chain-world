@@ -120,6 +120,12 @@ QUALITY = Module(
 # supplier -- the same order engine.step drew in before the refactor.
 REGISTRY: tuple[Module, ...] = (DISRUPTION, SUPPLIER)
 
+# SCORED world: the 3-factor inventory-management core. Demand is ON so the
+# order-sizing decision carries weight; disruption + supplier keep the lead-time
+# and sourcing pressure. Factors stay in REGISTRY order (rng draw order); the
+# remaining RICH factors (freight, port, quality) APPEND after these.
+CORE: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND)
+
 # RICH world: the multi-factor registry. New factors APPEND after the base two,
 # so their rng draws come last and the disruption/supplier trajectories (and the
 # pinned single-factor golden) are unperturbed. Goal-2 worlds use this (or a

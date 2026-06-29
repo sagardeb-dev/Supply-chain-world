@@ -50,12 +50,13 @@ class AgentRun:
         self.model_slug = model_slug
         self.mode = mode
         self.semantics = semantics
-        # registry=None -> default 2-factor world; pass registry=RICH for the
-        # full six-module world. masked=True -> the masked-distress supplier task
-        # (the benchmark); the choice lives in the pickled World, so resume
-        # restores the same world with no extra bookkeeping.
+        # registry=None -> the scored 3-factor CORE world (disruption + supplier
+        # + demand, with the masked supplier task on); pass registry=RICH for the
+        # full six-factor stretch. The choice lives in the pickled World, so
+        # resume restores the same world.
+        from src.world.registry import CORE
         self.world = World(WorldConfig(semantics=semantics, sup_mask_otif=masked),
-                           registry=registry)
+                           registry=CORE if registry is None else registry)
         self.world.reset(seed)
         self.recorder: list[dict] = []
         self.active = False  # guards against a double stream on reconnect

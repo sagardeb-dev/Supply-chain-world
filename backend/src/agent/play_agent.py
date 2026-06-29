@@ -21,7 +21,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 
 from src.world import World, WorldConfig
-from src.world.registry import RICH
+from src.world.registry import CORE, RICH
 
 STATUS_MARK = {"at_sea": "", "queued_at_suez": "Q", "diverted_via_cape": "D"}
 
@@ -40,7 +40,7 @@ def run_agent(seed, model, mode, semantics, rich):
     from .prompt import build_system_prompt
 
     run = AgentRun(uuid4().hex, seed, model, mode, semantics,
-                   registry=RICH if rich else None)
+                   registry=RICH if rich else CORE)
     agent = build_agent(model, mode, make_tools(run), MemorySaver(),
                         build_system_prompt(run.world))
     config = {"configurable": {"thread_id": run.run_id}, "recursion_limit": 200}
@@ -52,7 +52,7 @@ def run_agent(seed, model, mode, semantics, rich):
         log.append(s)
 
     wk0 = run.world.trace[0]
-    emit(f"{model} on seed {seed} ({'RICH 6-factor' if rich else '2-factor'})\n")
+    emit(f"{model} on seed {seed} ({'RICH 6-factor' if rich else 'CORE 3-factor'})\n")
     emit(f"WEEK 0  {_obs_summary(wk0['obs'], rich)}")
     emit(f"        hidden: {_fmt_hidden(wk0, rich)}")
     for update in agent.stream(kickoff, config, stream_mode="updates"):
@@ -120,7 +120,7 @@ def run_policy(seed, policy, semantics, rich):
     # masked too, so a policy baseline shares the agent's masked trajectory (the
     # lead-slip rng draw shifts the seed's trajectory vs the legacy world).
     world = World(WorldConfig(semantics=semantics, sup_mask_otif=True),
-                  registry=RICH if rich else None)
+                  registry=RICH if rich else CORE)
     world.reset(seed)
     while not world.done:
         world.step(_policy_action(policy, world))

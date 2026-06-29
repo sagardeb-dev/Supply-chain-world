@@ -17,7 +17,8 @@ from .registry import REGISTRY
 
 HIDDEN_KEYS = {"event_state", "event_age", "disruption_type",
                "cape_local_congestion", "regime", "canal_blocked",
-               "rel_state", "rel_age"}  # supplier factor internals
+               "rel_state", "rel_age",          # supplier factor internals
+               "regime_age"}                     # demand factor internal
 
 
 class World:
