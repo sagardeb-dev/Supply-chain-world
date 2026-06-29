@@ -1963,3 +1963,15 @@ def test_inventory_position_and_fill_rate():
         assert obs["inventory_position"] == obs["inventory"] + on_order
     assert 0.0 <= w.fill_rate <= 1.0
     assert w.demand_total > 0 and w.served_total <= w.demand_total
+
+
+def test_base_stock_beats_flat_ladder_under_demand():
+    """On the CORE world (noisy demand), the order-up-to-S base-stock policy
+    (free qty, service-level S) costs less than the flat always-20 ladder --
+    the whole point of making the inventory decision carry weight."""
+    from report_oracle import base_stock_cost, fixed_policy_cost
+    cfg = WorldConfig()
+    seeds = range(1, 11)
+    bstock = sum(base_stock_cost(s, cfg) for s in seeds) / 10
+    flat = sum(fixed_policy_cost(s, "suez", cfg) for s in seeds) / 10
+    assert bstock < flat
