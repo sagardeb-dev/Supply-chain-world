@@ -23,13 +23,7 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     The supplier stage (factor 2) resolves at DISPATCH: a drifting supplier's
     order ships round(qty * fulfilled_fraction) -- a degraded one may leave
     the dock SHORT (or not at all). Qualified always ships full. Once at sea the
-    voyage stage is untouched: stage 1 (sourcing) output feeds stage 2.
-
-    ponytail: PINNED MIRROR of oracle.causal.resolve_rel (the DP's relative-
-    pipeline twin). Do NOT dedup -- different state reps; kept in lockstep by
-    test_resolve_rel_mirrors_resolve_week + the causal_play cross-check. Touch
-    cost arithmetic here (including the crisis_backorder coupling) and you MUST
-    mirror it in resolve_rel."""
+    voyage stage is untouched: stage 1 (sourcing) output feeds stage 2."""
     eff = effects or {}
     shipping = 0.0
     shortfall_units = 0

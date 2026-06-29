@@ -2,3 +2,6 @@
 # secrets — never commit
 .env
 backend/.env
+.claude/
+.superpowers/
+docs/
