@@ -53,8 +53,8 @@ def run_agent(seed, model, mode, semantics, rich):
 
     wk0 = run.world.trace[0]
     emit(f"{model} on seed {seed} ({'RICH 6-factor' if rich else 'CORE 3-factor'})\n")
-    emit(f"WEEK 0  {_obs_summary(wk0['obs'], rich)}")
-    emit(f"        hidden: {_fmt_hidden(wk0, rich)}")
+    emit(f"WEEK 0  {_obs_summary(wk0['obs'])}")
+    emit(f"        hidden: {_fmt_hidden(wk0)}")
     for update in agent.stream(kickoff, config, stream_mode="updates"):
         if not isinstance(update, dict):
             continue
@@ -81,8 +81,8 @@ def run_agent(seed, model, mode, semantics, rich):
                     emit(f"WORLD  week {rec['week']}  cost ${p['cost']:.0f}  "
                          f"cum ${run.world.total_cost:.0f}"
                          + ("  ** DONE **" if p["done"] else ""))
-                    emit(f"       {_obs_summary(p['obs'], rich)}")
-                    emit(f"       hidden: {_fmt_hidden(rec, rich)}")
+                    emit(f"       {_obs_summary(p['obs'])}")
+                    emit(f"       hidden: {_fmt_hidden(rec)}")
                 elif isinstance(m, ToolMessage) and m.name == "buy_briefing":
                     emit("  ANALYST: " + str(m.content))
                 elif isinstance(m, ToolMessage) and m.name == "buy_audit":
@@ -116,11 +116,16 @@ def _msg_text(m) -> str:
 
 def run_policy(seed, policy, semantics, rich):
     """Drive a fixed policy (no LLM) through the same World/trace -- the
-    renderer's runnable check, and a cheap reference run."""
-    # masked too, so a policy baseline shares the agent's masked trajectory (the
-    # lead-slip rng draw shifts the seed's trajectory vs the legacy world).
-    world = World(WorldConfig(semantics=semantics, sup_mask_otif=True),
-                  registry=RICH if rich else CORE)
+    renderer's runnable check, and a cheap reference run. Masked, so the policy
+    shares the agent's masked trajectory. `basestock` reuses the scored baseline
+    driver, so the CLI reference matches /benchmark exactly (free qty, S from the
+    critical ratio, migrate to qualified)."""
+    cfg = WorldConfig(semantics=semantics, sup_mask_otif=True)
+    registry = RICH if rich else CORE
+    if policy == "basestock":
+        from report_oracle import drive_base_stock
+        return drive_base_stock(seed, cfg, registry)
+    world = World(cfg, registry=registry)
     world.reset(seed)
     while not world.done:
         world.step(_policy_action(policy, world))
@@ -128,14 +133,14 @@ def run_policy(seed, policy, semantics, rich):
 
 
 def _policy_action(policy, world):
-    if policy in ("suez", "cape"):
-        return {"qty": 20, "route": policy, "supplier": "qualified"}
-    # basestock: order up to ~80 via Suez/qualified
-    on_order = sum(s.qty for s in world.books.pipeline)
-    deficit = 80 - world.books.inventory - on_order
-    qty = 40 if deficit >= 40 else 20 if deficit >= 20 else 0
-    return ({"qty": qty, "route": "suez", "supplier": "qualified"} if qty
-            else {"qty": 0})
+    # always-20 via the chosen route, migrating to qualified on the first step:
+    # the masked world starts you contracted to spot, and the contract resolves
+    # before the order, so sign + source happen in one step. (basestock is
+    # driven separately in run_policy via the shared drive_base_stock.)
+    extra = ({} if "qualified" in world._contracted_suppliers()
+             else {"contract": {"action": "sign", "supplier": "qualified",
+                                 "terms": None}})
+    return {"qty": 20, "route": policy, "supplier": "qualified", **extra}
 
 
 # --- rendering -----------------------------------------------------------
@@ -188,13 +193,16 @@ def _regime(hs, factor):
     return st.get("regime", "-") if isinstance(st, dict) else "-"
 
 
-def _fmt_hidden(rec, rich):
+def _fmt_hidden(rec):
     hs = rec.get("hidden_states", {})
     spot = hs.get("supplier", {}).get("spot", {}).get("rel_state", "-")
     s = f"lane={_regime(hs, 'disruption')} spot={spot}"
-    if rich:
-        s += (f" dem={_regime(hs, 'demand')} frt={_regime(hs, 'freight')}"
-              f" prt={_regime(hs, 'port')} qly={_regime(hs, 'quality')}")
+    # show each latent factor's true regime iff it is registered (present in the
+    # hidden tape) -- the trace must reflect the world, not a CLI flag.
+    for fac, tag in (("demand", "dem"), ("freight", "frt"),
+                     ("port", "prt"), ("quality", "qly")):
+        if fac in hs:
+            s += f" {tag}={_regime(hs, fac)}"
     # masked task: flag the weeks the scorecard hides spot's true distress -- the
     # crux is whether the agent reads the books on exactly these weeks.
     row = next((r for r in rec["obs"].get("suppliers", []) if r["id"] == "spot"), {})
@@ -203,7 +211,7 @@ def _fmt_hidden(rec, rich):
     return s
 
 
-def render_trace(world, rich):
+def render_trace(world):
     print("\nlegend: line 1 = what the agent SAW + did + cost;  "
           "line 2 (HID) = the hidden truth it could not see\n")
     cum = 0.0
@@ -212,13 +220,17 @@ def render_trace(world, rich):
         cum += rec["cost"]
         line = (f"wk{wk:2} {_fmt_counts(obs):>9} inv{obs['inventory']:3} "
                 f"arr{obs['arrived']:2} pipe[{_fmt_pipe(obs)}]")
-        if rich:
-            line += (f" pos{obs.get('pos_units', '-')}/fc{obs.get('demand_forecast', '-')}"
-                     f" frt{obs.get('freight_index', '-')} aql={obs.get('aql_result', '-')}")
+        # each latent channel appears iff the world emits it (registry-driven).
+        if "pos_units" in obs:
+            line += f" pos{obs['pos_units']}/fc{obs['demand_forecast']}"
+        if "freight_index" in obs:
+            line += f" frt{obs['freight_index']}"
+        if "aql_result" in obs:
+            line += f" aql={obs['aql_result']}"
         line += _fmt_spot(obs)
         line += f"  ->  {_fmt_action(rec['action']):26} ${rec['cost']:6.0f} cum${cum:8.0f}"
         print(line)
-        print(f"       HID {_fmt_hidden(rec, rich)}")
+        print(f"       HID {_fmt_hidden(rec)}")
 
 
 def print_summary(world):
@@ -261,15 +273,21 @@ def print_supplier_summary(world):
           + (f"spot DIED wk{collapse}" if collapse else "spot survived"))
 
 
-def _obs_summary(obs, rich) -> str:
-    """One compact, human line of the visible situation -- not raw JSON."""
+def _obs_summary(obs) -> str:
+    """One compact, human line of the visible situation -- not raw JSON. Each
+    latent channel is shown iff the world actually emits it (registry-driven):
+    a CORE run shows demand; a RICH run adds freight/port/quality; a 2-factor
+    run shows neither. The trace never hides a channel the agent was given."""
     parts = [f"inv {obs['inventory']}", f"Suez {_fmt_counts(obs)}",
              f"arrived {obs['arrived']}", f"pipe [{_fmt_pipe(obs)}]"]
-    if rich:
-        parts += [f"demand {obs.get('pos_units', '-')}/{obs.get('demand_forecast', '-')}",
-                  f"freight {obs.get('freight_index', '-')}",
-                  f"port {obs.get('berth_wait', '-')}d",
-                  f"qual {obs.get('aql_result', '-')}"]
+    if "pos_units" in obs:
+        parts.append(f"demand {obs['pos_units']}/{obs['demand_forecast']}")
+    if "freight_index" in obs:
+        parts.append(f"freight {obs['freight_index']}")
+    if "berth_wait" in obs:
+        parts.append(f"port {obs['berth_wait']}d")
+    if "aql_result" in obs:
+        parts.append(f"qual {obs['aql_result']}")
     return "  ".join(str(p) for p in parts) + _fmt_spot(obs)
 
 
@@ -295,7 +313,7 @@ def main():
 
     if args.policy:
         world = run_policy(args.seed, args.policy, args.semantics, args.rich)
-        render_trace(world, args.rich)         # no reasoning to show for a policy
+        render_trace(world)                    # no reasoning to show for a policy
         print_summary(world)
         print_supplier_summary(world)
     else:
