@@ -19,9 +19,11 @@ Copied verbatim from `config.py` — every prompt number and test must match the
 - **Never hardcode the factor count.** The scored world is 3-factor `CORE`; the world is genuinely 6-factor (`RICH`) with a multi-SKU future. Drive behavior off the registry + the module/supplier profiles, never off a literal factor list or a literal `"spot"`.
 - The legacy `CausalOracle` is **deleted**, not preserved. Do not reintroduce a pinned oracle value or a `resolve_rel` mirror.
 
-## Scope decision (flag for veto before Task 2)
+## Scope decision (resolved)
 
-The scored `CORE` world runs with **`sup_mask_otif = False`** (the masked-distress supplier task is demoted to an opt-in sub-challenge, per the spec). Rationale: with masking off the incumbent is `qualified` (reliable), so the order-up-to-S **baseline can source it without navigating contracts**, and the agent's cost is compared against the baseline on the **identical** world. Masking stays available via `masked=True` (runner) / `--masked` (play_agent) for the sourcing sub-challenge. If you want masking ON in the default scored world, the baselines must be made contract-aware first — out of scope for v1.
+The scored `CORE` world keeps **`sup_mask_otif = True`** — the masked-distress supplier task stays ON, now combined with the demand factor: the agent must size inventory under noisy demand AND detect/migrate off a silently-failing incumbent. `masked` does **not** gate the supplier factor (the reliability chain + scorecard are in `CORE` regardless); it gates the *deception layer* (lagging scorecard, noisy `realized_fill`/`lead_slip` channels, `buy_audit`, starting on `spot`). That layer is the task we built, so it stays on.
+
+To keep the bar comparable, the order-up-to-S **baseline migrates to `qualified` on its first step** (signs the contract in the same step, then sources it) — the competent naive play: buy reliability, then size inventory. The agent beats it by riding cheap `spot` while it is healthy and migrating only when it turns. `/benchmark` builds its baselines with `sup_mask_otif=True` to match the scored world. (`masked=False` stays a valid config for an inventory-only variant; the `test_base_stock_beats_flat_ladder_under_demand` test uses it to isolate the pure demand effect.)
 
 ## File Structure
 
@@ -230,26 +232,23 @@ Expected: FAIL — `ImportError: cannot import name 'CORE'`.
 CORE: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND)
 ```
 
-- [ ] **Step 4: Point the agent harness at CORE (masking off by default)**
+- [ ] **Step 4: Point the agent harness at CORE (masking stays ON)**
 
-`runner.py:47` — change the signature defaults (find the `AgentRun.__init__` line with `registry=None, masked: bool = True`):
+Keep `masked=True` everywhere — only the **registry** default changes from the 2-factor world to `CORE`.
 
-```python
-                 semantics: str = "real", registry=None, masked: bool = False):
-```
-
-`runner.py:53-58` — replace the world construction so `registry=None` means CORE:
+`runner.py:53-58` — replace the world construction so `registry=None` means CORE (leave the `masked: bool = True` signature at line 47 untouched):
 
 ```python
         # registry=None -> the scored 3-factor CORE world (disruption + supplier
-        # + demand); pass registry=RICH for the full six-factor stretch. The
-        # choice lives in the pickled World, so resume restores the same world.
+        # + demand, with the masked supplier task on); pass registry=RICH for the
+        # full six-factor stretch. The choice lives in the pickled World, so
+        # resume restores the same world.
         from src.world.registry import CORE
         self.world = World(WorldConfig(semantics=semantics, sup_mask_otif=masked),
                            registry=CORE if registry is None else registry)
 ```
 
-`play_agent.py:23-24` — ensure `CORE` is importable; change the import line:
+`play_agent.py:24` — add `CORE` to the registry import:
 
 ```python
 from src.world.registry import CORE, RICH
@@ -261,10 +260,10 @@ from src.world.registry import CORE, RICH
                    registry=RICH if rich else CORE)
 ```
 
-`play_agent.py:121-123` — same for the no-LLM policy world; replace `sup_mask_otif=True` / `registry=RICH if rich else None`:
+`play_agent.py:121-123` — same for the no-LLM policy world; keep `sup_mask_otif=True`, only flip the registry default:
 
 ```python
-    world = World(WorldConfig(semantics=semantics, sup_mask_otif=masked),
+    world = World(WorldConfig(semantics=semantics, sup_mask_otif=True),
                   registry=RICH if rich else CORE)
 ```
 
@@ -273,15 +272,6 @@ from src.world.registry import CORE, RICH
 ```python
     emit(f"{model} on seed {seed} ({'RICH 6-factor' if rich else 'CORE 3-factor'})\n")
 ```
-
-`play_agent.py:287-288` — add a `--masked` opt-in next to `--rich` (and thread `masked` into the two world builders / the `run`/`policy` calls — set `masked=False` default):
-
-```python
-    ap.add_argument("--masked", action="store_true",
-                    help="enable the masked-distress supplier sub-challenge")
-```
-
-(Plumb `args.masked` to the `masked=` kwarg of `AgentRun`/the policy `World`. Where `play_agent` builds `AgentRun`, pass `masked=args.masked`.)
 
 - [ ] **Step 5: Extend the hidden-leak guard for demand**
 
@@ -572,15 +562,29 @@ from statistics import NormalDist
 from src.world.registry import CORE
 ```
 
+Both baselines source `qualified`. Under the masked world you start on `spot`, so they must **migrate to `qualified` on the first step** (the contract sub-action resolves before the order in the same `step`, so signing + ordering happen in one call). A tiny `_qualified_action` helper folds the one-time sign in.
+
 Replace `fixed_policy_cost` (lines 19-24):
 
 ```python
+def _qualified_action(w, base: dict) -> dict:
+    """Attach a one-time qualified sign if we don't already hold a live
+    qualified contract (the masked world starts you on spot). The contract
+    resolves before the order, so sign + source happen in one step."""
+    if "qualified" not in w._contracted_suppliers():
+        base = dict(base)
+        base["contract"] = {"action": "sign", "supplier": "qualified",
+                            "terms": None}
+    return base
+
+
 def fixed_policy_cost(seed: int, route: str, cfg: WorldConfig,
                       registry=None) -> float:
     w = World(cfg, registry=CORE if registry is None else registry)
     w.reset(seed)
     while not w.done:
-        w.step({"qty": 20, "route": route, "supplier": "qualified"})
+        w.step(_qualified_action(
+            w, {"qty": 20, "route": route, "supplier": "qualified"}))
     return w.total_cost
 ```
 
@@ -602,17 +606,21 @@ def _service_level_S(cfg: WorldConfig) -> int:
 def base_stock_cost(seed: int, cfg: WorldConfig, registry=None) -> float:
     """Order-up-to-S via Suez/qualified with a FREE quantity -- the textbook
     base-stock policy a competent non-adaptive planner runs. S is the
-    service-level target from the critical ratio, NOT a hardcoded constant."""
+    service-level target from the critical ratio, NOT a hardcoded constant.
+    Migrates to qualified up front (the competent naive play vs a masked spot)."""
     w = World(cfg, registry=CORE if registry is None else registry)
     w.reset(seed)
     S = _service_level_S(cfg)
     while not w.done:
         position = w.books.inventory + sum(s.qty for s in w.books.pipeline)
         qty = max(0, min(S - position, cfg.order_max))
-        w.step({"qty": qty, "route": "suez", "supplier": "qualified"}
-               if qty else {"qty": 0})
+        base = ({"qty": qty, "route": "suez", "supplier": "qualified"}
+                if qty else {"qty": 0})
+        w.step(_qualified_action(w, base))
     return w.total_cost
 ```
+
+> Note: `_qualified_action` adds the contract whenever no live qualified contract exists. On a `qty: 0` step it still signs (contracts resolve regardless of qty). Under `masked=False` (the test's `WorldConfig()`), qualified is the evergreen incumbent from week 0, so the helper is a no-op and the comparison is pure inventory sizing.
 
 - [ ] **Step 4: Run the suite**
 
@@ -693,7 +701,7 @@ Replace `main()` (lines 51-105) with a baseline-only sweep (drop the clairvoyant
 
 ```python
 def main():
-    cfg = WorldConfig()
+    cfg = WorldConfig(sup_mask_otif=True)   # match the scored CORE+masked world
     print(f"{'seed':>4} {'suez20':>8} {'cape20':>8} {'bstock':>8} "
           f"{'bs_fill':>8} {'naive_min':>9}")
     for seed in range(1, 21):
@@ -729,7 +737,7 @@ def benchmark(seed: int) -> JSONResponse:
     if not (0 <= seed <= 1_000_000_000):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "seed out of range")
-    cfg = WorldConfig()
+    cfg = WorldConfig(sup_mask_otif=True)   # match the scored CORE+masked world
     suez20 = fixed_policy_cost(seed, "suez", cfg)
     cape20 = fixed_policy_cost(seed, "cape", cfg)
     basestock = base_stock_cost(seed, cfg)
@@ -985,7 +993,7 @@ git commit -m "chore: drop dead demand_units, fix stale oracle/tool-count commen
 
 **Spec coverage** (each spec §4 component → task):
 - §4.1 CORE registry → Task 2. §4.2 free qty → Task 1. §4.3 inventory_position + lost-sales → Task 3. §4.4 de-hardcode "spot" → Task 4. §4.5 metric + base-stock S + decoupled /benchmark → Tasks 5–6. §4.6 prompt → Task 7. §4.7 delete oracle → Task 6. §4.8 cleanups → Task 8. §5 HIDDEN_KEYS demand → Task 2. §6 tests → folded into each task (one meaningful test each, per the "no test bloat" instruction). §8 acceptance criteria 1–5 → Tasks 2/1, 3/5/6, 6, 7, 4 respectively.
-- **Deviation (flagged):** scored world runs `masked=False` (Scope decision section) — confirm before Task 2. Prompt gating is the *light* version (Task 7 ponytail note) — full section-strip deferred.
+- **Decision:** scored world runs `masked=True` (Scope decision section) — the supplier task stays on, baselines migrate to qualified. Prompt gating is the *light* version (Task 7 ponytail note) — full section-strip deferred.
 
 **Placeholder scan:** no TBD/TODO; every code step shows the exact replacement.
 
