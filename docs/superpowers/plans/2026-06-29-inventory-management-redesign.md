@@ -193,7 +193,7 @@ git commit -m "feat(world): free order quantity (order_max cap replaces the {0,2
 
 **Interfaces:**
 - Consumes: `DISRUPTION, SUPPLIER, DEMAND` modules (already defined in `registry.py`).
-- Produces: `registry.CORE: tuple[Module, ...]`. `AgentRun(...)` and `play_agent` default world = `CORE`, `sup_mask_otif=False`.
+- Produces: `registry.CORE: tuple[Module, ...]`. `AgentRun(...)` and `play_agent` default world = `CORE`; masking stays ON (`sup_mask_otif=True`, the default) — only the registry default changes.
 
 - [ ] **Step 1: Write the failing test**
 
