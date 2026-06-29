@@ -10,7 +10,7 @@ This file only calls it, keeping the two-factor read in its one auditable home.
 from ..config import WorldConfig
 from ..couplings import crisis_backorder
 from ..modules.disruption import HiddenState
-from ..modules.supplier import SupplierState
+from ..modules.supplier import SUPPLIERS, SupplierState
 from .books import Books, Shipment, _advance
 
 
@@ -34,17 +34,22 @@ def resolve_week(books: Books, qty: int, supplier: str | None,
     shipping = 0.0
     shortfall_units = 0
     if qty:
-        frac = sup.fulfilled_fraction if supplier == "spot" else 1.0
+        prof = SUPPLIERS[supplier]
+        # a drifting supplier may leave the dock short (its noisy fulfilled
+        # fraction); a non-drifting one always ships full -- read the PROFILE,
+        # never the "spot" literal, so a second drifting supplier just works.
+        frac = sup.fulfilled_fraction if prof["drifts"] else 1.0
         shipped = round(qty * frac)
         shortfall_units = qty - shipped
         if shipped:
-            # freight regime (rich world) scales the route base rate; default 1.0
             fmult = eff.get("freight_mult", 1.0)
             base = ((cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost)
                     * fmult)
-            # unit economics (A8.1): spot undercuts the lane, qualified adds a premium
-            unit = (base - cfg.spot_unit_discount if supplier == "spot"
-                    else base + cfg.qualified_premium)
+            # unit economics: base + sign*magnitude from the supplier's econ
+            # profile (qualified +premium, spot -discount, backup +delta). cfg
+            # stays the single source of truth for the magnitude.
+            econ = prof["econ"]
+            unit = base + econ["sign"] * getattr(cfg, econ["attr"])
             books.pipeline.append(Shipment(shipped, route, week, supplier))
             shipping = shipped * unit
 

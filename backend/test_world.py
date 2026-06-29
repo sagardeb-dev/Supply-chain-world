@@ -1927,6 +1927,28 @@ def test_core_registry_runs_stochastic_demand():
     assert len(set(pos)) > 1                     # stochastic, not the flat constant
 
 
+def test_supplier_economics_read_profile_not_spot_literal():
+    """resolve_week keys off the supplier PROFILE, not the "spot" literal:
+    backup prices via its econ delta (+0.3, previously mis-billed as qualified's
+    +1.0), and a drifting supplier still short-ships per its fulfilled_fraction."""
+    from src.world.substrate.logistics import resolve_week
+    from src.world.substrate.books import Books
+    from src.world.modules.disruption import HiddenState
+    from src.world.modules.supplier import SupplierState
+    cfg = WorldConfig()
+    # backup: non-drifting, econ delta +0.3 over the Suez base (4.0) -> 4.3/unit.
+    books = Books(inventory=80)
+    _arrived, costs = resolve_week(books, 20, "backup", "suez", HiddenState(),
+                                   SupplierState(), week=0, cfg=cfg)
+    assert costs["shipping"] == 20 * (cfg.suez_unit_cost + cfg.backup_unit_delta)
+    # a drifting supplier (degraded) ships short, driven by its state, not "spot".
+    books2 = Books(inventory=80)
+    degraded = SupplierState(rel_state="degraded")     # fulfilled_fraction 0.0
+    _a2, _c2 = resolve_week(books2, 20, "spot", "suez", HiddenState(),
+                            degraded, week=0, cfg=cfg)
+    assert books2.pipeline == []                        # 0 units shipped
+
+
 def test_inventory_position_and_fill_rate():
     """inventory_position = on_hand + on_order (lost-sales, no backorders); the
     run-level fill_rate = served/demanded is well-formed."""

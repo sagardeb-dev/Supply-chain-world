@@ -247,7 +247,8 @@ class World:
             eff["freight_mult"] = lock.rate
         arrived, costs = resolve_week(
             self.books, qty, supplier if qty else None,
-            route if qty else None, self.hidden, self.suppliers["spot"],
+            route if qty else None, self.hidden,
+            self.suppliers[supplier] if qty else None,
             self.week, self.cfg, effects=eff)
         if lock:
             lock.weeks_left -= 1
@@ -279,8 +280,8 @@ class World:
         # honest books signal (you ordered, this much actually shipped). Present
         # only when you sourced the drifting supplier, so it accrues as you buy
         # from it (history-forced). Observed fact, not a hidden readout.
-        if self.cfg.sup_mask_otif and qty and supplier == "spot":
-            obs["realized_fill"] = self.suppliers["spot"].fulfilled_fraction
+        if self.cfg.sup_mask_otif and qty and SUPPLIERS[supplier]["drifts"]:
+            obs["realized_fill"] = self.suppliers[supplier].fulfilled_fraction
         info = {"hidden": self.hidden.to_dict()}  # for replay/oracle, never the agent
         self.trace.append({"week": self.week, "hidden": info["hidden"],
                            "hidden_states": self._hidden_full(),
