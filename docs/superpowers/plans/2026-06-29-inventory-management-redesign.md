@@ -778,22 +778,22 @@ git commit -m "refactor: delete the legacy CausalOracle; /benchmark serves base-
 
 **Interfaces:**
 - Consumes: `world.registry`, `world.cfg.sup_mask_otif`.
-- Produces: a CORE prompt that states the ~95% service target, removes the "don't carry a buffer" steer, omits the `lock_freight` lever and freight playbook when freight is not registered, and a `place_order` that defaults an omitted supplier to the world's incumbent.
+- Produces: a CORE prompt that states the ~95% service target, removes the "don't carry a buffer" steer, omits the `lock_freight(weeks)` lever signature when freight is not registered (+ an honesty note for residual rich-channel mentions), and a `place_order` that defaults an omitted supplier to the world's incumbent.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 def test_prompt_reframes_buffer_and_default_supplier():
-    """The CORE prompt sizes a buffer toward the implied service target and no
-    longer steers against buffers or describes the freight lever it lacks; an
-    omitted supplier defaults to the incumbent instead of raising."""
+    """The CORE prompt sizes a buffer toward the implied service target, no
+    longer steers against buffers, and does not offer the freight lever it
+    lacks; an omitted supplier defaults to the incumbent instead of raising."""
     from src.world.registry import CORE
     from src.agent.prompt import build_system_prompt
     w = World(WorldConfig(), registry=CORE); w.reset(7)
     p = build_system_prompt(w)
     assert "do not carry a big buffer" not in p          # anti-buffer steer gone
     assert "95%" in p                                    # service target stated
-    assert "lock_freight" not in p                       # freight not in CORE
+    assert "lock_freight(weeks)" not in p                # freight lever stripped (CORE)
     # default supplier resolves to the incumbent (qualified here) -> no raise
     class _Run:
         world = w
@@ -804,10 +804,12 @@ def test_prompt_reframes_buffer_and_default_supplier():
     assert "supplier=qualified" in out
 ```
 
+Note: the test checks the lever *signature* `lock_freight(weeks)` is gone (the one call-inviting form). Incidental passive mentions of the word are covered by the honesty note in Step 4 (full channel-strip is deferred — see the note there).
+
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cd backend && uv run pytest test_world.py::test_prompt_reframes_buffer_and_default_supplier -q`
-Expected: FAIL — the prompt still contains "do not carry a big buffer", `lock_freight`, and no "95%"; the default supplier is the literal `"qualified"` (passes here by luck but the magic-string is wrong for masked worlds — see Step 5).
+Expected: FAIL — the prompt still contains "do not carry a big buffer", the `lock_freight(weeks)` lever, and no "95%"; the default supplier is the literal `"qualified"` (passes here by luck but the magic-string is wrong for masked worlds — see Step 5).
 
 - [ ] **Step 3: Remove the anti-buffer steer, add the service target (always-on)**
 
@@ -847,45 +849,41 @@ the lane are genuinely calm.
 
 - [ ] **Step 4: Gate the freight lever + add the absent-channel honesty line**
 
-`prompt.py` `build_system_prompt` — at the top of the function (before the `if not world.cfg.sup_mask_otif` return), compute registry membership and strip the freight lever / playbook when freight is absent, and add a one-line note that absent channels do not apply. Replace the early `if not world.cfg.sup_mask_otif: return SYSTEM_PROMPT` with:
+`prompt.py` — add `import re` as the first line of the module (the file currently has no imports).
+
+In `build_system_prompt`, replace the early `if not world.cfg.sup_mask_otif: return SYSTEM_PROMPT` with the gating below. It strips the freight **lever bullet** when freight is absent (the one genuine hazard — a tool *signature* that invites a call to a tool `make_tools` doesn't provide), with a self-policing assert so a future prompt reword that breaks the anchor fails loudly instead of silently leaving the lever. A short DOTALL regex is used because `SYSTEM_PROMPT`'s backslash line-continuations mean the runtime string has **no newlines mid-bullet** — full-text `.replace()` with embedded `\n` would silently no-op.
 
 ```python
-    has_freight = any(m.id == "freight" for m in world.registry)
+    present = {m.id for m in world.registry}
     base = SYSTEM_PROMPT
-    if not has_freight:
-        # the lock_freight tool is not provided in this world (make_tools gates
-        # it on the freight module) -- don't describe a lever the agent can't
-        # call, and drop its playbook bullet.
+    if "freight" not in present:
+        # lock_freight is gated out of make_tools without the freight module --
+        # strip its lever bullet so the prompt never offers a tool the agent
+        # can't call. Short DOTALL anchor (lever start -> "in the report."),
+        # robust to the prompt's backslash line-continuations.
+        stripped = re.sub(r"- lock_freight\(weeks\):.*?in the report\.\n", "",
+                          base, flags=re.DOTALL)
+        assert stripped != base, (
+            "freight-lever anchor stopped matching SYSTEM_PROMPT")
+        base = stripped
+    if not {"freight", "port", "quality"} <= present:
+        # honesty: a CORE/partial world doesn't emit every channel/cost below.
         base = base.replace(
-            "- lock_freight(weeks): forward-buy the freight rate -- FIX this "
-            "week's freight \ncost multiplier for the next `weeks` weeks. While "
-            "locked you pay the locked \nrate regardless of the spot index: it "
-            "shields you from a rate spike, but you \nforgo a drop, and an "
-            "unused week still burns the window. A within-week action \n(it does "
-            "NOT advance the week); lock, then place_order in the same week to \n"
-            "ship at the locked rate. Lock when you believe the rate regime is "
-            "about to \ntighten; the active lock shows as `freight_lock` (rate + "
-            "weeks_left) in the \nreport.\n", "")
-        base = base.replace(
-            "- Watch the freight regime: when the index and outlook signal "
-            "tightening, \nlock_freight before a spike to cap your shipping "
-            "cost; in slack stay on the \nspot rate. A lock is a bet -- right, "
-            "it saves a spike; wrong, you overpay vs a \ndrop.\n", "")
-    # honesty: a CORE/partial world does not emit every channel described below.
-    base = base.replace(
-        "- cost_breakdown: what last week cost you, by category.",
-        "- cost_breakdown: what last week cost you, by category.\n"
-        "Channels not present in a given week's report do not apply to this "
-        "run (FREIGHT, PORT, and QUALITY appear only in richer worlds).")
+            "- cost_breakdown: what last week cost you, by category.",
+            "- cost_breakdown: what last week cost you, by category.\n"
+            "Some channels and levers described above (freight rate-locking, "
+            "PORT, QUALITY) exist only in richer worlds; if a tool isn't "
+            "offered or a channel isn't in your weekly report, it does not "
+            "apply this run.")
     if not world.cfg.sup_mask_otif:
         return base
     p = base
 ```
 
-Then keep the rest of the masked-overlay edits, but they must operate on `p` (= `base`). **Important:** the masked overlay's first edit currently anchors on `"- lock_freight(weeks): forward-buy"` (line ~197). The masked task is only ever run on a freight-bearing world (RICH) where that anchor survives; if you ever run masked on CORE, this anchor would be stripped. Guard it: in the masked branch, if `not has_freight`, anchor the `buy_audit` insertion on `"- buy_briefing()"` instead. Add at the masked-branch insertion:
+Then keep the rest of the masked-overlay edits, operating on `p` (= `base`). **Important:** the masked overlay's first edit currently anchors on `"- lock_freight(weeks): forward-buy"` (line ~197). When masking runs on a freight-less world (e.g. CORE) that anchor was just stripped above, so guard it — anchor the `buy_audit` insertion on `"- buy_briefing(): pay"` instead. Replace the existing hardcoded `p.replace("- lock_freight(weeks): forward-buy", ...)` block with:
 
 ```python
-    audit_anchor = ("- lock_freight(weeks): forward-buy" if has_freight
+    audit_anchor = ("- lock_freight(weeks): forward-buy" if "freight" in present
                     else "- buy_briefing(): pay")
     p = p.replace(audit_anchor,
         f"- buy_audit(): pay {world.cfg.audit_cost:.0f} for a direct read of "
@@ -893,9 +891,9 @@ Then keep the rest of the masked-overlay edits, but they must operate on `p` (= 
         f"Optional.\n{audit_anchor}")
 ```
 
-(Replace the existing hardcoded `p.replace("- lock_freight(weeks): forward-buy", ...)` block with the above. Leave the other three masked replaces and the closing `assert` unchanged.)
+(Leave the other three masked replaces and the closing `assert` unchanged.)
 
-> **ponytail / deferral:** this is the *light* gating — it removes the one channel that is an actual hazard (a described-but-absent **tool**), and tells the agent to ignore absent passive channels (FREIGHT/PORT/QUALITY readouts). Full per-section surgery (stripping every FREIGHT/PORT/QUALITY paragraph + cost line) is deferred: those are passive descriptions the agent simply won't see values for, and the existing prompt already ships them to the 2-factor masked task today, so this is not a regression. Revisit if eval traces show the agent hallucinating those channels.
+> **ponytail / deferral:** this strips only the freight **lever signature** (the call-inviting form) plus an honesty note — the one real hazard is offering a tool the agent doesn't have, and `make_tools` already gates `lock_freight` out, so even a stray call from a residual passive mention errors gracefully rather than misleading. Full per-channel surgery (stripping every FREIGHT/PORT/QUALITY readout bullet, the LOOP mention, and the demurrage/rework cost lines) is deferred: those are passive descriptions the agent won't see values for, the honesty note covers them, and the existing prompt already ships them to the masked task today — not a regression. Revisit if eval traces show the agent chasing absent channels.
 
 - [ ] **Step 5: Default place_order's supplier to the incumbent**
 
