@@ -1567,6 +1567,49 @@ def test_rich_world_port_deterministic_and_demurrage_occurs():
     assert charged > 0
 
 
+def test_expedite_air_adds_inventory_and_bills_capped():
+    """expedite_air is a within-week action (no advance) that flies units in on a
+    fast lane bypassing the port: they land in inventory the next step (capped at
+    air_weekly_cap) and are billed at air_unit_cost; a step with no expedite has
+    no air cost line."""
+    from src.world.registry import RICH
+    def stepped(expedite):
+        w = World(registry=RICH); w.reset(3)
+        if expedite:
+            conf = w.expedite_air(1000)             # ask for more than the cap
+            assert w.week == 0                      # within-week: does not advance
+            assert conf["qty"] == CFG.air_weekly_cap
+        o, _, _, _ = w.step({"qty": 0, "route": None, "supplier": None})
+        return w, o
+    w_air, o_air = stepped(True)
+    w_base, o_base = stepped(False)
+    # the flown units (capped) land as extra inventory after the same step
+    assert w_air.books.inventory - w_base.books.inventory == CFG.air_weekly_cap
+    assert o_air["cost_breakdown"]["air"] == pytest.approx(
+        CFG.air_unit_cost * CFG.air_weekly_cap)
+    assert "air" not in o_base["cost_breakdown"]
+    # air_inbound is set-and-consumed inside the step -> always 0 at an obs point
+    assert w_air.books.air_inbound == 0
+
+
+def test_expedite_air_tool_only_in_rich_world():
+    """expedite_air exists only where a destination port does; the 2-factor world
+    keeps its two-tool surface (and the oracle never sees an air lever)."""
+    from src.agent.tools import make_tools
+    from src.world.registry import RICH
+
+    class FakeRun:
+        def __init__(self, registry):
+            self.world = World(registry=registry); self.world.reset(3)
+        def record(self, *a):
+            pass
+
+    base = [t.name for t in make_tools(FakeRun(None))]
+    rich = [t.name for t in make_tools(FakeRun(RICH))]
+    assert base == ["buy_briefing", "place_order"]
+    assert "expedite_air" in rich
+
+
 # --- module 6: quality (NOISY discrete AQL emission; RICH only) ------------
 
 def test_quality_completes_the_six_factor_world():
@@ -1677,6 +1720,53 @@ def test_rich_cost_keyset_does_not_leak_hidden_state():
     o2, _, _, _ = w2.step({"qty": 20, "route": "suez", "supplier": "qualified"})
     assert "demurrage" not in o2["cost_breakdown"]
     assert "rework" not in o2["cost_breakdown"]
+
+
+def test_inspect_batch_tool_only_in_rich_world():
+    """inspect_batch exists only where a quality process does; the 2-factor world
+    keeps its two-tool surface (and the oracle never sees an inspection lever)."""
+    from src.agent.tools import make_tools
+    from src.world.registry import RICH
+
+    class FakeRun:
+        def __init__(self, registry):
+            self.world = World(registry=registry); self.world.reset(3)
+        def record(self, *a):
+            pass
+
+    base = [t.name for t in make_tools(FakeRun(None))]
+    rich = [t.name for t in make_tools(FakeRun(RICH))]
+    assert base == ["buy_briefing", "place_order"]
+    assert "inspect_batch" in rich
+
+
+def test_inspect_batch_cuts_rework_and_bills():
+    """inspect_batch is a within-week action (no advance) that scales down THIS
+    week's defect fraction, so a defective batch lands with fewer bad units and
+    less rework. inspect is within-week and consumes no rng, so an inspect-run and
+    a no-inspect-run on the same seed stay rng-aligned and differ ONLY by the
+    discount. Seed 7 drifts at least once over the horizon (base rework > 0)."""
+    from src.world.registry import RICH
+
+    def episode(inspect):
+        w = World(registry=RICH); w.reset(7)
+        total_rework, saw_fee = 0.0, False
+        while not w.done:
+            if inspect:
+                before = w.week
+                conf = w.inspect_batch()
+                assert w.week == before          # within-week: did not advance
+                assert conf["fee"] == CFG.inspect_fee
+            o, _, _, _ = w.step({"qty": 40, "route": "cape", "supplier": "qualified"})
+            total_rework += o["cost_breakdown"].get("rework", 0.0)
+            saw_fee |= o["cost_breakdown"].get("inspect", 0.0) == CFG.inspect_fee
+        return total_rework, saw_fee
+
+    ins_rework, ins_fee = episode(True)
+    base_rework, base_fee = episode(False)
+    assert base_rework > 0            # the seed actually exercises quality
+    assert ins_rework < base_rework   # inspection recovered defects -> less rework
+    assert ins_fee and not base_fee   # fee billed only when inspected
 
 
 # --- masked-distress supplier task (cfg.sup_mask_otif) -----------------------
@@ -1853,6 +1943,7 @@ def test_prompt_reframes_buffer_and_default_supplier():
     assert "do not carry a big buffer" not in p          # anti-buffer steer gone
     assert "95%" in p                                    # service target stated
     assert "lock_freight(weeks)" not in p                # freight lever stripped (CORE)
+    assert "expedite_air(qty)" not in p                  # port lever stripped (CORE)
     # default supplier resolves to the incumbent (qualified here) -> no raise
     class _Run:
         world = w

@@ -1,5 +1,5 @@
 """The agent's system prompt: the desk, the full lever set (route, supplier,
-contracts, freight lock), the six observation channels, the honest structure, the loop
+contracts, freight lock, air expedite, quality inspection), the six observation channels, the honest structure, the loop
 contract. This is the load-bearing artifact -- every number here matches
 config.py / modules/*/config.py, and nothing here leaks hidden state (no regime
 names as the CURRENT state, no oracle, no seed, no hidden tape). The agent is
@@ -58,6 +58,21 @@ forgo a drop, and an unused week still burns the window. A within-week action \
 ship at the locked rate. Lock when you believe the rate regime is about to \
 tighten; the active lock shows as `freight_lock` (rate + weeks_left) in the \
 report.
+- expedite_air(qty): fly units in on a fast air lane that BYPASSES a jammed \
+destination port -- they land in your inventory NEXT week regardless of port \
+congestion, at 15/unit (far dearer than sea, but cheaper than a 20/unit \
+stockout), capped at 20 units a week. A within-week action (it does NOT advance \
+the week); expedite, then place_order in the same week. Use it when you believe \
+the port is holding your arrivals (high berth_wait/wait_outlook, or your ship \
+ETAs sliding) and you would otherwise stock out -- but a lone slow week may be a \
+brief customs hold that clears next week, so weigh the air premium against \
+waiting one week to confirm. An unused expedite in a calm week is wasted money.
+- inspect_batch(): pay 40 to run an incoming inspection on THIS week's arriving \
+batch -- it sorts and reworks the defects, recovering about 70% of them before \
+they stock (fewer units lost to defects, less rework). A within-week action (it \
+does NOT advance the week); inspect, then place_order in the same week. Use it \
+when your aql_result has been reading marginal/reject (the process looks to be \
+drifting) and a defective batch is landing; on a clean run it is wasted money.
 
 SUPPLIERS (who you buy from -- pick per order)
 - qualified (the incumbent): reliable (99% OTIF), but dearest -- it adds \
@@ -108,7 +123,10 @@ plus a margin for demand swings and delays), not more.
 difference.
 - demurrage: 2 per held unit per week when the destination port holds your \
 arrivals (see PORT).
+- air: 15 per unit when you expedite_air to fly units past a jammed port (see \
+PORT).
 - rework: 15 per defective unit when quality is off (see QUALITY).
+- inspect: 40 when you inspect_batch to sort a bad arriving batch (see QUALITY).
 - briefing: 30 each; dual-source overhead: 4/week.
 
 WHAT YOU SEE EACH WEEK (your only signals; the latent ones are NOISY -- filter \
@@ -141,7 +159,8 @@ demurrage.
 - QUALITY: aql_result (accept / marginal / reject -- incoming inspection). \
 When the supplier's process drifts out of control, a fraction of your arrivals \
 are defective: they do not stock and they cost rework. One reject is not \
-proof; track the run.
+proof; track the run. When the run has clearly turned, inspect_batch the week a \
+batch lands to recover most of its defects.
 - cost_breakdown: what last week cost you, by category.
 
 THE LANE STRUCTURE (told to you plainly -- use it)
@@ -175,6 +194,16 @@ the lane are genuinely calm.
 lock_freight before a spike to cap your shipping cost; in slack stay on the \
 spot rate. A lock is a bet -- right, it saves a spike; wrong, you overpay vs a \
 drop.
+- Watch the port: when berth_wait and wait_outlook climb and your arrivals stop \
+landing (their ETAs sliding week over week), the destination port is holding \
+your ships. If you are draining toward a stockout, expedite_air to bridge the \
+gap -- but a lone slow week may be a brief customs hold that clears next week, \
+so weigh the air premium against waiting a week to see if the congestion \
+persists.
+- Watch quality: when aql_result keeps reading marginal/reject the process is \
+drifting and your arrivals will carry defects (lost units + rework); \
+inspect_batch the week a batch lands to recover most of them -- worth it once \
+you believe the run has turned, wasted on a clean batch.
 - Match your supplier to the risk: spot is cheapest when it is healthy and the \
 lane is calm, but a wobble or a disruption turns it expensive fast; qualified \
 and backup are your reliable fallbacks; a second contract is a hedge with a \
@@ -212,6 +241,24 @@ def build_system_prompt(world) -> str:
                           base, flags=re.DOTALL)
         assert stripped != base, (
             "freight-lever anchor stopped matching SYSTEM_PROMPT")
+        base = stripped
+    if "port" not in present:
+        # expedite_air is gated out of make_tools without the port module -- strip
+        # its lever bullet so the prompt never offers a tool the agent can't call.
+        stripped = re.sub(r"- expedite_air\(qty\):.*?wasted money\.\n", "",
+                          base, flags=re.DOTALL)
+        assert stripped != base, (
+            "port-lever anchor stopped matching SYSTEM_PROMPT")
+        base = stripped
+    if "quality" not in present:
+        # inspect_batch is gated out of make_tools without the quality module --
+        # strip its lever bullet so the prompt never offers a tool the agent can't
+        # call. Non-greedy anchor starts on the lever name, so it stops at
+        # inspect_batch's own "wasted money." (not expedite_air's identical ending).
+        stripped = re.sub(r"- inspect_batch\(\):.*?wasted money\.\n", "",
+                          base, flags=re.DOTALL)
+        assert stripped != base, (
+            "quality-lever anchor stopped matching SYSTEM_PROMPT")
         base = stripped
     if not {"freight", "port", "quality"} <= present:
         # honesty: a CORE/partial world doesn't emit every channel/cost below.

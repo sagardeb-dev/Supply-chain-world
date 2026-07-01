@@ -10,7 +10,8 @@ import json
 from langchain_core.tools import tool
 
 from src.world.engine import HIDDEN_KEYS
-from .service import svc_audit, svc_briefing, svc_lock, svc_step
+from .service import (svc_audit, svc_briefing, svc_expedite, svc_inspect,
+                      svc_lock, svc_step)
 
 
 def make_tools(run):
@@ -55,6 +56,36 @@ def make_tools(run):
         run.record(run.world.week, "lock_freight", r)
         return (f"Freight locked at {r['rate']:.2f}x for {r['weeks_left']} "
                 f"weeks. You now pay this rate regardless of spot.")
+
+    @tool
+    def expedite_air(qty: int) -> str:
+        """Fly units in on a fast air lane that BYPASSES a jammed destination
+        port: they land in your inventory NEXT week regardless of port congestion,
+        at 15/unit (far dearer than sea, but cheaper than a 20/unit stockout).
+        Capped at 20 units/week. A within-week action: it does NOT advance the
+        week -- expedite, then place_order in the same week. Use it when you
+        believe the port is holding your arrivals (high berth_wait/wait_outlook,
+        or your ship ETAs sliding) and you would otherwise stock out; an unused
+        expedite in a calm week is wasted money."""
+        r = svc_expedite(run.world, qty)
+        run.record(run.world.week, "expedite_air", r)
+        return (f"Air-expedited {r['qty']} units at {r['unit_cost']}/unit; they "
+                f"land next week, bypassing the port.")
+
+    @tool
+    def inspect_batch() -> str:
+        """Pay to run an incoming inspection on THIS week's arriving batch: it
+        sorts and reworks the defective units so most are recovered before they
+        reach your inventory (fewer units lost to defects, less rework). A
+        within-week action: it does NOT advance the week -- inspect, then
+        place_order in the same week. Use it when your aql_result has been reading
+        marginal/reject (the supplier's process looks to be drifting) and a
+        defective batch is landing; on a clean run it is wasted money."""
+        r = svc_inspect(run.world)
+        run.record(run.world.week, "inspect_batch", r)
+        return (f"Inspection ordered (cost {r['fee']:.0f}): sorting this week's "
+                f"batch, recovering ~{r['catch_rate']:.0%} of any defects before "
+                f"they stock.")
 
     @tool
     def place_order(rationale: str, qty: int, route: str = "",
@@ -109,4 +140,12 @@ def make_tools(run):
     # 2-factor world there is nothing to lock.
     if any(m.id == "freight" for m in run.world.registry):
         tools.append(lock_freight)
+    # expedite_air only exists where a destination port does (rich worlds); the
+    # 2-factor/CORE world has no port to expedite around.
+    if any(m.id == "port" for m in run.world.registry):
+        tools.append(expedite_air)
+    # inspect_batch only exists where a quality process does (rich worlds); the
+    # 2-factor/CORE world has no incoming quality to inspect.
+    if any(m.id == "quality" for m in run.world.registry):
+        tools.append(inspect_batch)
     return tools

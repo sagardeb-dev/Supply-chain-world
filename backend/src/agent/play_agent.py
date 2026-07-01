@@ -89,6 +89,10 @@ def run_agent(seed, model, mode, semantics, rich):
                     emit("  AUDIT: " + str(m.content))
                 elif isinstance(m, ToolMessage) and m.name == "lock_freight":
                     emit("  FREIGHT: " + str(m.content))
+                elif isinstance(m, ToolMessage) and m.name == "expedite_air":
+                    emit("  AIR: " + str(m.content))
+                elif isinstance(m, ToolMessage) and m.name == "inspect_batch":
+                    emit("  QC: " + str(m.content))
     return run.world, "\n".join(log)
 
 

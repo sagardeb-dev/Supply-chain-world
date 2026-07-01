@@ -112,6 +112,13 @@ class WorldConfig:
     port_wait_noise_sd: float = 2.0        # sd of the realized berth-wait days
     port_outlook_sd: float = 3.0           # sd of the forward outlook (noisier)
     port_demurrage_rate: float = 2.0       # demurrage cost per held unit per week
+    # air-expedite lever (Rec #3): fly units in on a separate fast-lane that
+    # bypasses the blocked port, landing next week. Priced BETWEEN sea (4-6/unit)
+    # and a stockout (20/unit) so it's a real decision -- not a default, not a
+    # dead letter. ponytail: both are calibration knobs the tuning workflow will
+    # sweep; the values below are a grounded starting point, not final.
+    air_unit_cost: float = 15.0            # per unit flown in (dearer than sea, < stockout)
+    air_weekly_cap: int = 20               # most you can fly per week (= one week's demand)
 
     # --- supplier-quality semi-Markov kernel (latent module #6, RICH worlds only) ---
     # Unused unless the quality module is in the registry. Process drift is
@@ -128,6 +135,14 @@ class WorldConfig:
     # the regime off the arrived/rework delta. Gamma multiplier, mean 1.0,
     # CV = 1/sqrt(shape); shape 2.0 -> CV ~0.71 (adjacent regimes overlap).
     q_defect_shape: float = 2.0
+    # incoming-inspection lever (quality): pay a FLAT fee to sort/rework this week's
+    # arriving batch, recovering a fraction of its defects before they hit the books
+    # (supplier-containment framing -- caught units are replaced, so both the
+    # shortfall and the rework drop). Real 3rd-party inspection is ~$300-500 FLAT per
+    # batch and <=80% effective (never perfect). ponytail: both are calibration knobs
+    # the tuning workflow will sweep; grounded starting points, not final.
+    inspect_fee: float = 40.0            # flat, per week inspected (NOT per unit)
+    inspect_catch_rate: float = 0.7      # fraction of this batch's defects recovered (<1)
 
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam

@@ -32,6 +32,22 @@ def svc_lock(world, weeks: int) -> dict:
     return world.lock_freight(weeks)
 
 
+def svc_expedite(world, qty: int) -> dict:
+    """Fly units in on the air fast-lane past a jammed port (port lever). A
+    within-week action (does not advance). Mirrors svc_lock; the engine validates."""
+    if world.done:
+        raise RuntimeError("episode is done")
+    return world.expedite_air(qty)
+
+
+def svc_inspect(world) -> dict:
+    """Run an incoming inspection on this week's batch (quality lever). A
+    within-week action (does not advance). Mirrors svc_expedite; the engine validates."""
+    if world.done:
+        raise RuntimeError("episode is done")
+    return world.inspect_batch()
+
+
 def svc_step(world, qty: int, route: str | None,
              supplier: str | None = None, contract: dict | None = None) -> dict:
     """Commit this week's order (and optional contract sub-action) and advance

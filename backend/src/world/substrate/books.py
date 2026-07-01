@@ -56,6 +56,8 @@ class Books:
                              # live contracts at once (dual-sourcing, R6) is legal
                              # by data shape, not a special case.
         self.freight_lock = None  # FreightLock | None: a live forward freight buy
+        self.air_inbound = 0  # units flown in this week (expedite_air), landed at the next resolve
+        self.inspected = False  # inspect_batch flag for this week; consumed at the next resolve
 
 
 def _advance(s: Shipment, h: HiddenState, week: int, cfg: WorldConfig) -> float:

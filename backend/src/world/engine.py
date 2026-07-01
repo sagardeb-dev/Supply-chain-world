@@ -126,6 +126,38 @@ class World:
         self.books.freight_lock = FreightLock(rate, weeks)
         return {"rate": rate, "weeks_left": weeks}
 
+    def expedite_air(self, qty: int) -> dict:
+        """Fly `qty` units in on the air fast-lane: they land in inventory NEXT
+        week, bypassing the blocked port, at cfg.air_unit_cost/unit. A within-week
+        action (does NOT advance, like lock_freight) -- a batch flown this week
+        covers next week's demand. Capped at cfg.air_weekly_cap. Only meaningful
+        where a destination port exists (rich worlds). The guard does NOT check
+        whether the port is actually blocked (that is hidden) -- the agent bets
+        from the noisy berth-wait signals; a wrong bet just overpays."""
+        if self.done:
+            raise RuntimeError("episode is done; call reset()")
+        if qty < 1:
+            raise ValueError("qty must be >= 1")
+        if "port_blocked" not in self._effects():
+            raise ValueError("no port to expedite around in this world")
+        flown = min(qty, self.cfg.air_weekly_cap)
+        self.books.air_inbound = flown
+        return {"qty": flown, "unit_cost": self.cfg.air_unit_cost}
+
+    def inspect_batch(self) -> dict:
+        """Run an incoming inspection on THIS week's arriving batch: sort and rework
+        its defects so most are recovered before they hit the books, at a flat
+        cfg.inspect_fee. A within-week action (does NOT advance, like expedite_air).
+        Only meaningful where a quality process exists (rich worlds). Does NOT check
+        whether quality is actually drifting (that is hidden) -- the agent bets from
+        the noisy aql_result; a wrong bet just wastes the fee."""
+        if self.done:
+            raise RuntimeError("episode is done; call reset()")
+        if "defect_fraction" not in self._effects():
+            raise ValueError("no incoming quality to inspect in this world")
+        self.books.inspected = True
+        return {"fee": self.cfg.inspect_fee, "catch_rate": self.cfg.inspect_catch_rate}
+
     def _new_contract(self, supplier: str, start: int, terms: str | None = None):
         """Mint a contract from a negotiation-menu selection (R5). Defaults to
         the 'strict'-length mid profile when no terms are chosen; qualified is
@@ -238,6 +270,13 @@ class World:
 
         self.week += 1
         self._advance_modules()
+        # air-expedite (port lever): units flown in at the last decision land NOW,
+        # bypassing the blocked port -- added BEFORE resolve_week serves demand so
+        # they cover this week's shortfall. Billed below with the other levers.
+        air = self.books.air_inbound
+        self.books.air_inbound = 0
+        if air:
+            self.books.inventory += air
         # a live freight lock OVERRIDES this week's realized rate (you pay the
         # locked rate, up or down), then its window decrements -- per week, even
         # if you do not ship (an unused lock still burns).
@@ -245,6 +284,13 @@ class World:
         lock = self.books.freight_lock
         if lock:
             eff["freight_mult"] = lock.rate
+        # incoming-inspection lever (quality): sorting/rework recovers a fraction of
+        # a bad batch's defects before they stock -- scale THIS week's defect
+        # fraction, mirroring the freight-lock override above. logistics.py untouched.
+        inspected = self.books.inspected
+        self.books.inspected = False
+        if inspected and "defect_fraction" in eff:
+            eff["defect_fraction"] *= (1.0 - self.cfg.inspect_catch_rate)
         arrived, costs = resolve_week(
             self.books, qty, supplier if qty else None,
             route if qty else None, self.hidden,
@@ -264,6 +310,10 @@ class World:
             costs["briefing"] = self.cfg.briefing_cost
         if audited:
             costs["audit"] = self.cfg.audit_cost
+        if air:
+            costs["air"] = self.cfg.air_unit_cost * air
+        if inspected:
+            costs["inspect"] = self.cfg.inspect_fee
         # Lever 3: carrying >=2 live contracts costs a weekly overhead. Counted
         # AFTER the kernel step so a contract whose supplier just died this week
         # no longer counts (it is now open).
@@ -289,7 +339,8 @@ class World:
                                       "supplier": supplier if qty else None,
                                       "contract": action.get("contract"),
                                       "briefing": briefed, "audited": audited,
-                                      "freight_locked": bool(lock)},
+                                      "freight_locked": bool(lock),
+                                      "expedited": air},
                            "obs": obs, "cost": cost})
         return obs, cost, self.done, info
 
