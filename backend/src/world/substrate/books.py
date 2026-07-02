@@ -71,6 +71,7 @@ class Books:
                              # by data shape, not a special case.
         self.freight_lock = None  # FreightLock | None: a live forward freight buy
         self.air_inbound = 0  # units flown in this week (expedite_air), landed at the next resolve
+        self.air_component = ""  # which component those units are (multi-component products)
         self.inspected = False  # inspect_batch flag for this week; consumed at the next resolve
         # Phase 3 (per-supplier quality worlds): which supplier ids were
         # inspected THIS week (inspect_batch(supplier)); consumed at the next

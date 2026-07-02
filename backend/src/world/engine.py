@@ -137,23 +137,33 @@ class World:
         self.books.freight_lock = FreightLock(rate, weeks)
         return {"rate": rate, "weeks_left": weeks}
 
-    def expedite_air(self, qty: int) -> dict:
+    def expedite_air(self, qty: int, component: str = "") -> dict:
         """Fly `qty` units in on the air fast-lane: they land in inventory NEXT
         week, bypassing the blocked port, at cfg.air_unit_cost/unit. A within-week
         action (does NOT advance, like lock_freight) -- a batch flown this week
         covers next week's demand. Capped at cfg.air_weekly_cap. Only meaningful
         where a destination port exists (rich worlds). The guard does NOT check
         whether the port is actually blocked (that is hidden) -- the agent bets
-        from the noisy berth-wait signals; a wrong bet just overpays."""
+        from the noisy berth-wait signals; a wrong bet just overpays.
+
+        Multi-component product: `component` is REQUIRED (which part to fly).
+        Single-component: omit it (legacy call shape unchanged)."""
         if self.done:
             raise RuntimeError("episode is done; call reset()")
         if qty < 1:
             raise ValueError("qty must be >= 1")
         if "port_blocked" not in self._effects():
             raise ValueError("no port to expedite around in this world")
+        cids = products.structure(self.cfg.product).component_ids
+        if len(cids) == 1:
+            component = component or cids[0]
+        if component not in cids:
+            raise ValueError(f"component must be one of {list(cids)}")
         flown = min(qty, self.cfg.air_weekly_cap)
         self.books.air_inbound = flown
-        return {"qty": flown, "unit_cost": self.cfg.air_unit_cost}
+        self.books.air_component = component
+        return {"qty": flown, "unit_cost": self.cfg.air_unit_cost,
+                "component": component}
 
     def inspect_batch(self, supplier: str | None = None) -> dict:
         """Run an incoming inspection on THIS week's arriving batch: sort and rework
@@ -374,11 +384,10 @@ class World:
         air = self.books.air_inbound
         self.books.air_inbound = 0
         if air:
-            # Phase-1 assumption, loud on purpose: flying in "units" only means
-            # something when there is exactly one component to fly.
-            assert len(prod.component_ids) == 1, \
-                "expedite_air assumes a single-component product (Phase 1)"
-            self.books.components[prod.component_ids[0]] += air
+            # expedite_air validated the component at call time; single-component
+            # products defaulted it to the sole id there.
+            self.books.components[self.books.air_component] += air
+            self.books.air_component = ""
         # a live freight lock OVERRIDES this week's realized rate (you pay the
         # locked rate, up or down), then its window decrements -- per week, even
         # if you do not ship (an unused lock still burns).

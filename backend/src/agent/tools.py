@@ -1,9 +1,10 @@
 """The agent's two tools: buy_briefing (paid intel) and place_order (act +
 advance). Built per-run via make_tools(run); each drives run.world through the
 svc_* service layer and records a structured event. Tools return readable text
-for the model. No fallback logic in the ENGINE: bad input raises; the two order
-tools convert that to a REJECTED message (the model corrects and retries --
-a wrong call must never kill the episode), other tools surface it upstream. The
+for the model. No fallback logic in the ENGINE: bad input raises; every tool
+that takes arguments converts that to a REJECTED message (the model corrects
+and retries -- a wrong call must never kill the episode). buy_briefing and
+buy_audit take no arguments, so they have nothing to reject. The
 week-0 obs is delivered in the kickoff message (runner.kickoff_message), not a
 tool -- a stateful agent already holds every later obs from place_order."""
 
@@ -53,27 +54,32 @@ def make_tools(run):
         for the next `weeks` weeks (weeks >= 1). While locked you pay the locked
         rate regardless of the spot index -- it shields you from a spike but you
         forgo a drop, and an unused week still burns the window. A within-week
-        action: it does NOT advance the week. Lock when you believe the rate
-        regime is about to tighten."""
-        r = svc_lock(run.world, weeks)
+        action: it does NOT advance the week."""
+        try:
+            r = svc_lock(run.world, weeks)
+        except ValueError as e:
+            return f"REJECTED: {e}"
         run.record(run.world.week, "lock_freight", r)
         return (f"Freight locked at {r['rate']:.2f}x for {r['weeks_left']} "
                 f"weeks. You now pay this rate regardless of spot.")
 
     @tool
-    def expedite_air(qty: int) -> str:
-        """Fly units in on a fast air lane that BYPASSES a jammed destination
-        port: they land in your inventory NEXT week regardless of port congestion,
-        at 15/unit (far dearer than sea, but cheaper than a 20/unit stockout).
-        Capped at 20 units/week. A within-week action: it does NOT advance the
-        week -- expedite, then place_order in the same week. Use it when you
-        believe the port is holding your arrivals (high berth_wait/wait_outlook,
-        or your ship ETAs sliding) and you would otherwise stock out; an unused
-        expedite in a calm week is wasted money."""
-        r = svc_expedite(run.world, qty)
+    def expedite_air(qty: int, component: str = "") -> str:
+        """Fly units in on a fast air lane that BYPASSES the destination port:
+        they land in your inventory NEXT week regardless of port congestion,
+        at 15/unit. Capped at 20 units/week. A within-week action: it does NOT
+        advance the week -- expedite, then place_order in the same week.
+
+        If this product has multiple components, `component` is REQUIRED --
+        name which part to fly in (e.g. "battery"); omit it for a
+        single-component product."""
+        try:
+            r = svc_expedite(run.world, qty, component)
+        except ValueError as e:
+            return f"REJECTED: {e}"
         run.record(run.world.week, "expedite_air", r)
-        return (f"Air-expedited {r['qty']} units at {r['unit_cost']}/unit; they "
-                f"land next week, bypassing the port.")
+        return (f"Air-expedited {r['qty']} units of {r['component']} at "
+                f"{r['unit_cost']}/unit; they land next week, bypassing the port.")
 
     @tool
     def inspect_batch(supplier: str = "") -> str:
@@ -81,9 +87,7 @@ def make_tools(run):
         sorts and reworks the defective units so most are recovered before they
         reach your inventory (fewer units lost to defects, less rework). A
         within-week action: it does NOT advance the week -- inspect, then
-        place_order in the same week. Use it when your aql_result has been reading
-        marginal/reject (the supplier's process looks to be drifting) and a
-        defective batch is landing; on a clean run it is wasted money.
+        place_order in the same week.
 
         In this world, EACH supplier runs its own process quality -- pass
         `supplier` ("qualified", "spot", or "backup") to target that supplier's
@@ -106,8 +110,7 @@ def make_tools(run):
         to order; they all dispatch together on the route you pass to place_order.
         A within-week action: it does NOT advance the week -- stage every
         component order first, then call place_order once to ship them and
-        advance. You assemble finished goods from these components (see the BOM),
-        so keep each component's inventory_position sized to demand over its lead.
+        advance. You assemble finished goods from these components (see the BOM).
         You may stage from a supplier you have not signed yet IF you sign it in
         the same week's place_order (the contract resolves before dispatch)."""
         try:
