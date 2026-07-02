@@ -16,6 +16,14 @@ def svc_briefing(world) -> dict:
     return {"briefing": world.request_briefing(), "cost": world.cfg.briefing_cost}
 
 
+def svc_audit(world) -> dict:
+    """Buy the pre-decision supplier audit for the current week (masked task).
+    Charged once per week by the engine; repeat calls return the same text."""
+    if world.done:
+        raise RuntimeError("episode is done")
+    return {"audit": world.request_audit(), "cost": world.cfg.audit_cost}
+
+
 def svc_lock(world, weeks: int) -> dict:
     """Forward-buy the current freight rate for `weeks` weeks. A within-week
     action (does not advance). Mirrors svc_briefing; the engine validates."""
@@ -24,15 +32,43 @@ def svc_lock(world, weeks: int) -> dict:
     return world.lock_freight(weeks)
 
 
+def svc_expedite(world, qty: int) -> dict:
+    """Fly units in on the air fast-lane past a jammed port (port lever). A
+    within-week action (does not advance). Mirrors svc_lock; the engine validates."""
+    if world.done:
+        raise RuntimeError("episode is done")
+    return world.expedite_air(qty)
+
+
+def svc_inspect(world, supplier: str | None = None) -> dict:
+    """Run an incoming inspection on this week's batch (quality lever). A
+    within-week action (does not advance). Mirrors svc_expedite; the engine
+    validates -- including whether `supplier` is required (per-supplier
+    quality worlds) or must be omitted (legacy singleton quality)."""
+    if world.done:
+        raise RuntimeError("episode is done")
+    return world.inspect_batch(supplier)
+
+
+def svc_order_component(world, component: str, qty: int, supplier: str) -> dict:
+    """Stage one component order line for this week's dispatch (assembly world).
+    A within-week action (does not advance). Mirrors svc_inspect; the engine
+    validates the component/qty/supplier/contract."""
+    if world.done:
+        raise RuntimeError("episode is done")
+    return world.stage_order(component, qty, supplier)
+
+
 def svc_step(world, qty: int, route: str | None,
              supplier: str | None = None, contract: dict | None = None) -> dict:
     """Commit this week's order (and optional contract sub-action) and advance
-    one week. `route`/`supplier` are canonical or None. The engine is the
-    single validator (no fallback) -- we do NOT re-check here. The hidden-state
-    `info` is dropped and never returned."""
+    one week. `route`/`supplier` are canonical or None. `route` is passed through
+    even when qty is 0 so a week that dispatches only STAGED component orders
+    (assembly world) still has its shared lane. The engine is the single
+    validator (no fallback); the hidden-state `info` is dropped."""
     if world.done:
         raise RuntimeError("episode is done")
-    action = {"qty": qty, "route": route if qty else None,
+    action = {"qty": qty, "route": route,
               "supplier": supplier if qty else None}
     if contract:
         action["contract"] = contract

@@ -21,14 +21,14 @@ from uuid import uuid4
 from dotenv import load_dotenv
 
 from src.world import World, WorldConfig
-from src.world.registry import RICH
+from src.world.registry import ASSEMBLY, CORE, RICH
 
 STATUS_MARK = {"at_sea": "", "queued_at_suez": "Q", "diverted_via_cape": "D"}
 
 
 # --- running -------------------------------------------------------------
 
-def run_agent(seed, model, mode, semantics, rich):
+def run_agent(seed, model, mode, semantics, rich, product="single"):
     """Stream the agent through the episode, printing it as a chat as it goes:
     the agent's reasoning, the order it places, then the world's reply with the
     hidden tape annotated. Returns (world, the printed chat as one string)."""
@@ -37,10 +37,16 @@ def run_agent(seed, model, mode, semantics, rich):
     from .runner import AgentRun, kickoff_message
     from .tools import make_tools
     from .factory import build_agent
+    from .prompt import build_system_prompt
 
+    # --rich always wins (the full six-factor stretch); else an assembly
+    # product (earbuds) gets ASSEMBLY (Phase 3: CORE + per-supplier quality),
+    # a single-component product the plain scored CORE world.
+    registry = RICH if rich else (ASSEMBLY if product != "single" else CORE)
     run = AgentRun(uuid4().hex, seed, model, mode, semantics,
-                   registry=RICH if rich else None)
-    agent = build_agent(model, mode, make_tools(run), MemorySaver())
+                   registry=registry, product=product)
+    agent = build_agent(model, mode, make_tools(run), MemorySaver(),
+                        build_system_prompt(run.world))
     config = {"configurable": {"thread_id": run.run_id}, "recursion_limit": 200}
     kickoff = {"messages": [{"role": "user", "content": kickoff_message(run.world)}]}
 
@@ -50,9 +56,9 @@ def run_agent(seed, model, mode, semantics, rich):
         log.append(s)
 
     wk0 = run.world.trace[0]
-    emit(f"{model} on seed {seed} ({'RICH 6-factor' if rich else '2-factor'})\n")
-    emit(f"WEEK 0  {_obs_summary(wk0['obs'], rich)}")
-    emit(f"        hidden: {_fmt_hidden(wk0, rich)}")
+    emit(f"{model} on seed {seed} ({'RICH 6-factor' if rich else 'CORE 3-factor'})\n")
+    emit(f"WEEK 0  {_obs_summary(wk0['obs'])}")
+    emit(f"        hidden: {_fmt_hidden(wk0)}")
     for update in agent.stream(kickoff, config, stream_mode="updates"):
         if not isinstance(update, dict):
             continue
@@ -79,12 +85,20 @@ def run_agent(seed, model, mode, semantics, rich):
                     emit(f"WORLD  week {rec['week']}  cost ${p['cost']:.0f}  "
                          f"cum ${run.world.total_cost:.0f}"
                          + ("  ** DONE **" if p["done"] else ""))
-                    emit(f"       {_obs_summary(p['obs'], rich)}")
-                    emit(f"       hidden: {_fmt_hidden(rec, rich)}")
+                    emit(f"       {_obs_summary(p['obs'])}")
+                    emit(f"       hidden: {_fmt_hidden(rec)}")
                 elif isinstance(m, ToolMessage) and m.name == "buy_briefing":
                     emit("  ANALYST: " + str(m.content))
+                elif isinstance(m, ToolMessage) and m.name == "buy_audit":
+                    emit("  AUDIT: " + str(m.content))
                 elif isinstance(m, ToolMessage) and m.name == "lock_freight":
                     emit("  FREIGHT: " + str(m.content))
+                elif isinstance(m, ToolMessage) and m.name == "expedite_air":
+                    emit("  AIR: " + str(m.content))
+                elif isinstance(m, ToolMessage) and m.name == "inspect_batch":
+                    emit("  QC: " + str(m.content))
+                elif isinstance(m, ToolMessage) and m.name == "order_component":
+                    emit("  STAGE: " + str(m.content))
     return run.world, "\n".join(log)
 
 
@@ -112,8 +126,16 @@ def _msg_text(m) -> str:
 
 def run_policy(seed, policy, semantics, rich):
     """Drive a fixed policy (no LLM) through the same World/trace -- the
-    renderer's runnable check, and a cheap reference run."""
-    world = World(WorldConfig(semantics=semantics), registry=RICH if rich else None)
+    renderer's runnable check, and a cheap reference run. Masked, so the policy
+    shares the agent's masked trajectory. `basestock` reuses the scored baseline
+    driver, so the CLI reference matches /benchmark exactly (free qty, S from the
+    critical ratio, migrate to qualified)."""
+    cfg = WorldConfig(semantics=semantics, sup_mask_otif=True)
+    registry = RICH if rich else CORE
+    if policy == "basestock":
+        from report_oracle import drive_base_stock
+        return drive_base_stock(seed, cfg, registry)
+    world = World(cfg, registry=registry)
     world.reset(seed)
     while not world.done:
         world.step(_policy_action(policy, world))
@@ -121,14 +143,14 @@ def run_policy(seed, policy, semantics, rich):
 
 
 def _policy_action(policy, world):
-    if policy in ("suez", "cape"):
-        return {"qty": 20, "route": policy, "supplier": "qualified"}
-    # basestock: order up to ~80 via Suez/qualified
-    on_order = sum(s.qty for s in world.books.pipeline)
-    deficit = 80 - world.books.inventory - on_order
-    qty = 40 if deficit >= 40 else 20 if deficit >= 20 else 0
-    return ({"qty": qty, "route": "suez", "supplier": "qualified"} if qty
-            else {"qty": 0})
+    # always-20 via the chosen route, migrating to qualified on the first step:
+    # the masked world starts you contracted to spot, and the contract resolves
+    # before the order, so sign + source happen in one step. (basestock is
+    # driven separately in run_policy via the shared drive_base_stock.)
+    extra = ({} if "qualified" in world._contracted_suppliers()
+             else {"contract": {"action": "sign", "supplier": "qualified",
+                                 "terms": None}})
+    return {"qty": 20, "route": policy, "supplier": "qualified", **extra}
 
 
 # --- rendering -----------------------------------------------------------
@@ -162,22 +184,44 @@ def _fmt_pipe(obs):
                     for s in obs["pipeline"]) or "-"
 
 
+def _fmt_spot(obs):
+    """Masked-task signals on one line: the drifting supplier's displayed
+    OTIF/band (lagging) and the realized books channels (lead-slip sensor +
+    this week's spot fill, if you sourced it). Empty in the legacy world."""
+    rows = obs.get("suppliers") or []
+    spot = next((r for r in rows if "realized_lead_slip" in r), None)
+    if spot is None:
+        return ""
+    fill = obs.get("realized_fill")
+    fill_s = f" fill{fill:.0%}" if fill is not None else ""
+    return (f"  spot[{spot['band']} otif{spot['otif'] if spot['otif'] is not None else '-'}"
+            f" slip{spot['realized_lead_slip']}{fill_s}]")
+
+
 def _regime(hs, factor):
     st = hs.get(factor)
     return st.get("regime", "-") if isinstance(st, dict) else "-"
 
 
-def _fmt_hidden(rec, rich):
+def _fmt_hidden(rec):
     hs = rec.get("hidden_states", {})
     spot = hs.get("supplier", {}).get("spot", {}).get("rel_state", "-")
     s = f"lane={_regime(hs, 'disruption')} spot={spot}"
-    if rich:
-        s += (f" dem={_regime(hs, 'demand')} frt={_regime(hs, 'freight')}"
-              f" prt={_regime(hs, 'port')} qly={_regime(hs, 'quality')}")
+    # show each latent factor's true regime iff it is registered (present in the
+    # hidden tape) -- the trace must reflect the world, not a CLI flag.
+    for fac, tag in (("demand", "dem"), ("freight", "frt"),
+                     ("port", "prt"), ("quality", "qly")):
+        if fac in hs:
+            s += f" {tag}={_regime(hs, fac)}"
+    # masked task: flag the weeks the scorecard hides spot's true distress -- the
+    # crux is whether the agent reads the books on exactly these weeks.
+    row = next((r for r in rec["obs"].get("suppliers", []) if r["id"] == "spot"), {})
+    if row.get("band") == "ontime" and spot in ("wobbling", "degraded"):
+        s += "  <<MASKED: card reads ontime>>"
     return s
 
 
-def render_trace(world, rich):
+def render_trace(world):
     print("\nlegend: line 1 = what the agent SAW + did + cost;  "
           "line 2 (HID) = the hidden truth it could not see\n")
     cum = 0.0
@@ -186,12 +230,17 @@ def render_trace(world, rich):
         cum += rec["cost"]
         line = (f"wk{wk:2} {_fmt_counts(obs):>9} inv{obs['inventory']:3} "
                 f"arr{obs['arrived']:2} pipe[{_fmt_pipe(obs)}]")
-        if rich:
-            line += (f" pos{obs.get('pos_units', '-')}/fc{obs.get('demand_forecast', '-')}"
-                     f" frt{obs.get('freight_index', '-')} aql={obs.get('aql_result', '-')}")
+        # each latent channel appears iff the world emits it (registry-driven).
+        if "pos_units" in obs:
+            line += f" pos{obs['pos_units']}/fc{obs['demand_forecast']}"
+        if "freight_index" in obs:
+            line += f" frt{obs['freight_index']}"
+        if "aql_result" in obs:
+            line += f" aql={obs['aql_result']}"
+        line += _fmt_spot(obs)
         line += f"  ->  {_fmt_action(rec['action']):26} ${rec['cost']:6.0f} cum${cum:8.0f}"
         print(line)
-        print(f"       HID {_fmt_hidden(rec, rich)}")
+        print(f"       HID {_fmt_hidden(rec)}")
 
 
 def print_summary(world):
@@ -205,16 +254,51 @@ def print_summary(world):
     print("by category: " + (line or "-"))
 
 
-def _obs_summary(obs, rich) -> str:
-    """One compact, human line of the visible situation -- not raw JSON."""
+def print_supplier_summary(world):
+    """Masked-task scorecard for the run: the reasoning behaviours, not the cost.
+    Did the agent lean on spot, sense via audit, and -- the headline -- how many
+    weeks was the card masking real distress while it kept sourcing spot?"""
+    if not world.cfg.sup_mask_otif:
+        return
+    spot_orders = fill_short = audits = masked_wks = masked_while_spot = 0
+    collapse = None
+    for rec in world.trace:
+        a, obs = rec["action"] or {}, rec["obs"]
+        true = rec["hidden_states"].get("supplier", {}).get("spot", {}).get("rel_state")
+        if true == "defunct" and collapse is None:
+            collapse = rec["week"]
+        row = next((r for r in obs.get("suppliers", []) if r["id"] == "spot"), {})
+        masked = row.get("band") == "ontime" and true in ("wobbling", "degraded")
+        masked_wks += masked
+        if a.get("audited"):
+            audits += 1
+        if a.get("supplier") == "spot" and a.get("qty"):
+            spot_orders += 1
+            fill_short += round(a["qty"] * (1 - obs.get("realized_fill", 1.0)))
+            masked_while_spot += masked
+    print(f"supplier: sourced spot {spot_orders}x (fill short {fill_short}u)  "
+          f"audits {audits} (${audits * world.cfg.audit_cost:.0f})  "
+          f"weeks card MASKED true distress: {masked_wks} "
+          f"({masked_while_spot} while still sourcing spot)  "
+          + (f"spot DIED wk{collapse}" if collapse else "spot survived"))
+
+
+def _obs_summary(obs) -> str:
+    """One compact, human line of the visible situation -- not raw JSON. Each
+    latent channel is shown iff the world actually emits it (registry-driven):
+    a CORE run shows demand; a RICH run adds freight/port/quality; a 2-factor
+    run shows neither. The trace never hides a channel the agent was given."""
     parts = [f"inv {obs['inventory']}", f"Suez {_fmt_counts(obs)}",
              f"arrived {obs['arrived']}", f"pipe [{_fmt_pipe(obs)}]"]
-    if rich:
-        parts += [f"demand {obs.get('pos_units', '-')}/{obs.get('demand_forecast', '-')}",
-                  f"freight {obs.get('freight_index', '-')}",
-                  f"port {obs.get('berth_wait', '-')}d",
-                  f"qual {obs.get('aql_result', '-')}"]
-    return "  ".join(str(p) for p in parts)
+    if "pos_units" in obs:
+        parts.append(f"demand {obs['pos_units']}/{obs['demand_forecast']}")
+    if "freight_index" in obs:
+        parts.append(f"freight {obs['freight_index']}")
+    if "berth_wait" in obs:
+        parts.append(f"port {obs['berth_wait']}d")
+    if "aql_result" in obs:
+        parts.append(f"qual {obs['aql_result']}")
+    return "  ".join(str(p) for p in parts) + _fmt_spot(obs)
 
 
 # --- entry ---------------------------------------------------------------
@@ -229,24 +313,31 @@ def main():
     ap.add_argument("--policy", choices=["suez", "cape", "basestock"],
                     help="run a fixed policy instead of the LLM (no model needed)")
     ap.add_argument("--rich", action="store_true",
-                    help="six-factor RICH world (default: two-factor)")
+                    help="six-factor RICH world (default: CORE 3-factor)")
     ap.add_argument("--mode", choices=["autonomous", "step_gated"],
                     default="autonomous")
     ap.add_argument("--semantics", choices=["real", "anon"], default="real")
+    ap.add_argument("--product", choices=["single", "earbuds"], default="single",
+                    help="product structure: earbuds = the assembly/BOM world")
     args = ap.parse_args()
     if not args.policy and not args.model:
         ap.error("--model is required (no default) unless you pass --policy")
+    if args.policy and args.product != "single":
+        ap.error("--policy drivers are single-product; use --model on earbuds")
 
     if args.policy:
         world = run_policy(args.seed, args.policy, args.semantics, args.rich)
-        render_trace(world, args.rich)         # no reasoning to show for a policy
+        render_trace(world)                    # no reasoning to show for a policy
         print_summary(world)
+        print_supplier_summary(world)
     else:
         world, chat = run_agent(args.seed, args.model, args.mode,
-                                args.semantics, args.rich)
+                                args.semantics, args.rich, args.product)
         print_summary(world)
+        print_supplier_summary(world)
         # persist: the user hit "where's the trace?" twice -- stdout isn't enough
-        out = Path("runs") / f"seed{args.seed}-{args.model.replace('/', '-')}.chat.txt"
+        tag = "" if args.product == "single" else f"-{args.product}"
+        out = Path("runs") / f"seed{args.seed}{tag}-{args.model.replace('/', '-')}.chat.txt"
         out.parent.mkdir(exist_ok=True)
         out.write_text(chat + "\n")
         print(f"\nsaved {out}")

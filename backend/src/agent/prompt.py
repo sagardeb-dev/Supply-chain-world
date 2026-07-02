@@ -1,11 +1,15 @@
 """The agent's system prompt: the desk, the full lever set (route, supplier,
-contracts, freight lock), the six observation channels, the honest structure, the loop
+contracts, freight lock, air expedite, quality inspection), the six observation channels, the honest structure, the loop
 contract. This is the load-bearing artifact -- every number here matches
 config.py / modules/*/config.py, and nothing here leaks hidden state (no regime
 names as the CURRENT state, no oracle, no seed, no hidden tape). The agent is
 TOLD the structure of each latent factor, exactly as a real desk knows how its
 lane and suppliers behave; it must still INFER the current state from noisy
 weekly signals."""
+
+import re
+
+from src.world.products import structure
 
 SYSTEM_PROMPT = """\
 You run the import replenishment desk for a European importer on the \
@@ -27,8 +31,9 @@ order, manage a contract, or both.
 week -- your demand/inventory position, the lane/disruption risk, freight, \
 sourcing -- and why this qty/route/supplier. The world does not advance \
 without it.
-  - qty in {0, 20, 40}. 0 = order nothing (no route/supplier needed). \
-20 = one shipment; 40 = two.
+  - qty: any whole number of units to order this week, from 0 up to 100 (about \
+five weeks of demand). 0 = order nothing (no route/supplier needed). There is no \
+fixed menu -- size qty to lift your inventory_position to the buffer you want.
   - route "suez" or "cape" (required if qty > 0):
     - "suez": base 4/unit, faster (~3 weeks), but the Suez/Red Sea corridor \
 can be disrupted -- a ship caught at the canal during a disruption waits, then \
@@ -55,6 +60,21 @@ forgo a drop, and an unused week still burns the window. A within-week action \
 ship at the locked rate. Lock when you believe the rate regime is about to \
 tighten; the active lock shows as `freight_lock` (rate + weeks_left) in the \
 report.
+- expedite_air(qty): fly units in on a fast air lane that BYPASSES a jammed \
+destination port -- they land in your inventory NEXT week regardless of port \
+congestion, at 15/unit (far dearer than sea, but cheaper than a 20/unit \
+stockout), capped at 20 units a week. A within-week action (it does NOT advance \
+the week); expedite, then place_order in the same week. Use it when you believe \
+the port is holding your arrivals (high berth_wait/wait_outlook, or your ship \
+ETAs sliding) and you would otherwise stock out -- but a lone slow week may be a \
+brief customs hold that clears next week, so weigh the air premium against \
+waiting one week to confirm. An unused expedite in a calm week is wasted money.
+- inspect_batch(): pay 40 to run an incoming inspection on THIS week's arriving \
+batch -- it sorts and reworks the defects, recovering about 70% of them before \
+they stock (fewer units lost to defects, less rework). A within-week action (it \
+does NOT advance the week); inspect, then place_order in the same week. Use it \
+when your aql_result has been reading marginal/reject (the process looks to be \
+drifting) and a defective batch is landing; on a clean run it is wasted money.
 
 SUPPLIERS (who you buy from -- pick per order)
 - qualified (the incumbent): reliable (99% OTIF), but dearest -- it adds \
@@ -96,14 +116,19 @@ COSTS (every number is real; weigh them)
 the freight index (see FREIGHT), paid when you order.
 - holding: 1 per unit per week -- on inventory ON HAND and IN TRANSIT (capital \
 on the water still costs you).
-- stockout: 20 per unit of unmet demand in a week -- by far the heaviest cost. \
-Running out is expensive; but over-ordering bleeds holding every week. Hold \
-enough buffer to survive a disruption, not more.
+- stockout: 20 per unit of unmet demand in a week -- 20x the holding cost, by \
+far the heaviest cost. Because a stockout costs ~20x a unit-week of holding, \
+the economics imply keeping demand satisfied about 95% of weeks: size your \
+safety buffer to cover demand over the order lead time (mean demand x lead, \
+plus a margin for demand swings and delays), not more.
 - surcharge: a Suez ship diverted around the Cape is billed the Cape-vs-Suez \
 difference.
 - demurrage: 2 per held unit per week when the destination port holds your \
 arrivals (see PORT).
+- air: 15 per unit when you expedite_air to fly units past a jammed port (see \
+PORT).
 - rework: 15 per defective unit when quality is off (see QUALITY).
+- inspect: 40 when you inspect_batch to sort a bad arriving batch (see QUALITY).
 - briefing: 30 each; dual-source overhead: 4/week.
 
 WHAT YOU SEE EACH WEEK (your only signals; the latent ones are NOISY -- filter \
@@ -111,6 +136,10 @@ them over several weeks, never trust a single reading)
 - week, inventory, arrived, and pipeline (your in-flight shipments with \
 estimated arrival weeks; an ETA that slips week-over-week is itself a signal a \
 corridor or port is degrading).
+- inventory_position and on_order: on_order is the total units already ordered \
+but not yet arrived (your pipeline); inventory_position = inventory on hand + \
+on_order. This is your order-up-to decision variable -- order enough to lift \
+inventory_position to a level that covers demand over the order lead time.
 - LANE: suez_count, bab_count, cape_count (ships that transited the Suez \
 Canal, the Bab-el-Mandeb strait, and the Cape this week) plus a trade-press \
 bulletin. When the Suez/Bab counts collapse and Cape rises, the corridor is in \
@@ -132,7 +161,8 @@ demurrage.
 - QUALITY: aql_result (accept / marginal / reject -- incoming inspection). \
 When the supplier's process drifts out of control, a fraction of your arrivals \
 are defective: they do not stock and they cost rework. One reject is not \
-proof; track the run.
+proof; track the run. When the run has clearly turned, inspect_batch the week a \
+batch lands to recover most of its defects.
 - cost_breakdown: what last week cost you, by category.
 
 THE LANE STRUCTURE (told to you plainly -- use it)
@@ -158,12 +188,24 @@ warning and front-loading is where most of the lane savings are.
 and stockouts cost far more than the Cape premium.
 - When a disruption looks like it is ending, a Suez ship may queue and then \
 get through or divert -- weigh waiting against the slip.
-- In quiet weeks keep ordering lean to demand; do not carry a big buffer you \
-pay holding on every week for no reason.
+- Even in quiet weeks keep a safety buffer sized to demand variability over the \
+lead time -- enough that a normal demand swing or a short shipping delay will \
+not stock you out (stockouts cost ~20x holding). Trim it only when demand and \
+the lane are genuinely calm.
 - Watch the freight regime: when the index and outlook signal tightening, \
 lock_freight before a spike to cap your shipping cost; in slack stay on the \
 spot rate. A lock is a bet -- right, it saves a spike; wrong, you overpay vs a \
 drop.
+- Watch the port: when berth_wait and wait_outlook climb and your arrivals stop \
+landing (their ETAs sliding week over week), the destination port is holding \
+your ships. If you are draining toward a stockout, expedite_air to bridge the \
+gap -- but a lone slow week may be a brief customs hold that clears next week, \
+so weigh the air premium against waiting a week to see if the congestion \
+persists.
+- Watch quality: when aql_result keeps reading marginal/reject the process is \
+drifting and your arrivals will carry defects (lost units + rework); \
+inspect_batch the week a batch lands to recover most of them -- worth it once \
+you believe the run has turned, wasted on a clean batch.
 - Match your supplier to the risk: spot is cheapest when it is healthy and the \
 lane is calm, but a wobble or a disruption turns it expensive fast; qualified \
 and backup are your reliable fallbacks; a second contract is a hedge with a \
@@ -179,3 +221,170 @@ until place_order tells you the episode is done. Do NOT ask the human \
 anything. Do NOT stop early. Every week's reasoning goes in the place_order \
 `rationale` so your thinking is always visible.
 """
+
+
+def _assembly_framing(world, base: str) -> str:
+    """ADD a component/assembly framing for a multi-component (BOM) world, gated
+    so a single-component world is byte-identical to SYSTEM_PROMPT (mirrors the
+    module-presence strips). Numbers come from the product structure, none
+    hardcoded. For an assembly world, order_component stages each part and
+    place_order's qty is unused (the staged lines ship on its route)."""
+    prod = structure(world.cfg.product)
+    if len(prod.component_ids) <= 1:
+        return base  # single-component world: prompt unchanged
+    bom = "; ".join(
+        f"{fg} = " + " + ".join(f"{q}x {c}" for c, q in prod.bom[fg].items())
+        for fg in prod.finished_goods)
+    section = (
+        "\n\nASSEMBLY (this is a components/BOM world -- read this)\n"
+        f"You do NOT buy finished goods. You import COMPONENTS by sea, hold them "
+        f"per component, and ASSEMBLE finished models to order each week. Bill of "
+        f"materials: {bom}. A shared component starves every model that needs it. "
+        "Assemble-to-order: components are the only buffer -- each week you build "
+        "each model up to the min over its BOM of (that component on hand / its "
+        "BOM qty), bounded by that model's demand; there is no finished-goods "
+        "stock.\n"
+        "- order_component(component, qty, supplier): stage a purchase of one "
+        "component this week. Call it once per component you want to buy; a "
+        "within-week action that does NOT advance. Then call place_order once to "
+        "dispatch every staged line on its route and advance the week -- in an "
+        "assembly world place_order's qty is unused (pass 0); route/supplier/"
+        "contract still apply.\n"
+        "- WHAT YOU SEE: `components` maps each component to its on_hand, "
+        "on_order, and inventory_position; `served` is the units of each model "
+        "you assembled and shipped this week; `demand` is each model's noisy POS "
+        "and forecast. Size each component's inventory_position to its own demand "
+        "(summed across the models that use it) over its own lead.")
+    return base + section
+
+
+def build_system_prompt(world) -> str:
+    """The system prompt for this world. Default worlds get SYSTEM_PROMPT
+    verbatim; the masked-distress task (cfg.sup_mask_otif) adds the buy_audit
+    lever and reframes the spot supplier so the OTIF scorecard is presented as
+    just the contracted metric alongside the realized books channels -- factual,
+    NOT prescriptive about which to trust (the agent must discover the scorecard
+    is gameable by comparing it to its own delivery history; that discovery is
+    the measurement). ponytail: targeted edits beat a forked 180-line copy that
+    drifts; the trailing assert catches any anchor that stops matching."""
+    present = {m.id for m in world.registry}
+    base = SYSTEM_PROMPT
+    base = _assembly_framing(world, base)
+    if "freight" not in present:
+        # lock_freight is gated out of make_tools without the freight module --
+        # strip its lever bullet so the prompt never offers a tool the agent
+        # can't call. Short DOTALL anchor (lever start -> "in the report."),
+        # robust to the prompt's backslash line-continuations.
+        stripped = re.sub(r"- lock_freight\(weeks\):.*?in the report\.\n", "",
+                          base, flags=re.DOTALL)
+        assert stripped != base, (
+            "freight-lever anchor stopped matching SYSTEM_PROMPT")
+        base = stripped
+    if "port" not in present:
+        # expedite_air is gated out of make_tools without the port module -- strip
+        # its lever bullet so the prompt never offers a tool the agent can't call.
+        stripped = re.sub(r"- expedite_air\(qty\):.*?wasted money\.\n", "",
+                          base, flags=re.DOTALL)
+        assert stripped != base, (
+            "port-lever anchor stopped matching SYSTEM_PROMPT")
+        base = stripped
+    if "quality" not in present:
+        # inspect_batch is gated out of make_tools without the quality module --
+        # strip its lever bullet so the prompt never offers a tool the agent can't
+        # call. Non-greedy anchor starts on the lever name, so it stops at
+        # inspect_batch's own "wasted money." (not expedite_air's identical ending).
+        stripped = re.sub(r"- inspect_batch\(\):.*?wasted money\.\n", "",
+                          base, flags=re.DOTALL)
+        assert stripped != base, (
+            "quality-lever anchor stopped matching SYSTEM_PROMPT")
+        base = stripped
+    if not {"freight", "port", "quality"} <= present:
+        # honesty: a CORE/partial world doesn't emit every channel/cost below.
+        _before = base
+        base = base.replace(
+            "- cost_breakdown: what last week cost you, by category.",
+            "- cost_breakdown: what last week cost you, by category.\n"
+            "Some channels and levers described above (freight rate-locking, "
+            "PORT, QUALITY) exist only in richer worlds; if a tool isn't "
+            "offered or a channel isn't in your weekly report, it does not "
+            "apply this run.")
+        assert base != _before, "cost_breakdown honesty-note anchor drifted"
+    if world.cfg.sup_all_drift:
+        # Phase 2: all three suppliers drift on their own hidden process, so the
+        # single-line characterisations above are now personalities, not
+        # guarantees. Gate strictly on the flag; do not restructure the section.
+        _b = base
+        base = base.replace(
+            "FIRST order can ship.",
+            "FIRST order can ship.\n- In THIS world EVERY supplier's reliability "
+            "drifts on its own hidden process -- not just spot -- so the notes "
+            "above are now characters, not guarantees: spot is cheap but "
+            "volatile, backup is middling, qualified is premium and the "
+            "steadiest of the three. Each supplier's scorecard row shows its own "
+            "current read, so sourcing each component is a live bet on whose "
+            "process is healthy right now.")
+        assert base != _b, "all-drift supplier-note anchor drifted"
+    if world.cfg.quality_per_supplier:
+        # Phase 3: quality is no longer one shared process -- each supplier
+        # runs its OWN, so aql_result/rework are now per-supplier too. Gate
+        # strictly on the flag; do not restructure the QUALITY section.
+        _b = base
+        base = base.replace(
+            "When the supplier's process drifts out of control, a fraction of "
+            "your arrivals are defective: they do not stock and they cost "
+            "rework.",
+            "In THIS world EACH supplier runs its OWN process quality (a cheap "
+            "supplier tends dirtier, a premium one cleaner) -- aql_result and "
+            "the defect run are per supplier, not a shared read. When a "
+            "supplier's process drifts out of control, a fraction of ITS "
+            "arrivals are defective: they scrap at receiving (never stock) and "
+            "starve assembly of that component -- for every finished good that "
+            "needs it -- plus rework cost.")
+        assert base != _b, "per-supplier quality-note anchor drifted"
+        _b = base
+        base = base.replace(
+            "inspect_batch the week a batch lands to recover most of them -- "
+            "worth it once you believe the run has turned, wasted on a clean "
+            "batch.",
+            "inspect_batch(supplier) the week that supplier's batch lands to "
+            "recover most of its defects -- it targets ONE supplier's incoming "
+            "batch, worth it once you believe that supplier's run has turned, "
+            "wasted on a clean one.")
+        assert base != _b, "per-supplier inspect-lever anchor drifted"
+    if not world.cfg.sup_mask_otif:
+        return base
+    p = base
+    audit_anchor = ("- lock_freight(weeks): forward-buy" if "freight" in present
+                    else "- buy_briefing(): pay")
+    p = p.replace(audit_anchor,
+        f"- buy_audit(): pay {world.cfg.audit_cost:.0f} for a direct read of "
+        "your spot supplier's current reliability state, before you order. "
+        f"Optional.\n{audit_anchor}")
+    p = p.replace(
+        "You read it off an OTIF scorecard (ontime / slipping / failing / "
+        "defunct).",
+        "Its OTIF scorecard (ontime / slipping / failing / defunct) is the "
+        "contracted on-time metric; you also see your realized experience with "
+        "spot -- realized_fill (how much of an order actually shipped when you "
+        "sourced it) and realized_lead_slip (its reported lead-time this week), "
+        "both noisy week to week. buy_audit gives a direct read of its current "
+        "state.")
+    p = p.replace(
+        "an OTIF scorecard per supplier (band + on-time % + quoted lead).",
+        "an OTIF scorecard per supplier (band + on-time % + quoted lead). For "
+        "spot you also see realized_fill (actual vs ordered, when you sourced "
+        "it) and realized_lead_slip (its reported lead behaviour this week).")
+    # the masked task inverts the incumbent: you START on spot (the supplier that
+    # can quietly fail), and qualified is the deliberate migration target.
+    p = p.replace(
+        "- spot: cheapest -- 1.5/unit BELOW",
+        "- spot (YOUR STARTING INCUMBENT: you begin already contracted to it and "
+        "source it by default): cheapest -- 1.5/unit BELOW")
+    p = p.replace(
+        "Evergreen contract; you start already contracted to it.",
+        "Evergreen contract. In this task you are NOT contracted to qualified at "
+        "the start -- sign it to migrate off spot when you judge spot has turned.")
+    assert all(s in p for s in ("buy_audit()", "realized_fill",
+               "STARTING INCUMBENT", "migrate off spot")), (
+        "build_system_prompt: an anchor stopped matching SYSTEM_PROMPT")
+    return p

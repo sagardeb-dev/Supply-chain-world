@@ -67,15 +67,5 @@ world:
 | `port_blocked` / `demurrage_rate` | `port` | `False` / `0.0` |
 | `defect_fraction` / `rework_rate` | `quality` | `0.0` |
 
-With `effects` empty (the default two-factor world), every branch collapses to
+With `effects` empty (the legacy two-factor world), every branch collapses to
 the original arithmetic — the world is **byte-identical**.
-
-## The pinned mirror
-
-`logistics.resolve_week` has a twin: `oracle/causal.py:resolve_rel`, which runs
-the *same* physics on the DP's canonical relative-pipeline encoding. The two
-operate on different state representations and are **deliberately not deduped**
-(a shared abstraction would de-optimize the DP or leak `Books` mutability into
-it). They are held in lockstep by `test_resolve_rel_mirrors_resolve_week` plus
-the per-step `causal_play` cross-check. **Touch the cost arithmetic here and you
-must mirror it there.**

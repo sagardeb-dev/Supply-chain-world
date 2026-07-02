@@ -1,7 +1,9 @@
 """The agent's two tools: buy_briefing (paid intel) and place_order (act +
 advance). Built per-run via make_tools(run); each drives run.world through the
 svc_* service layer and records a structured event. Tools return readable text
-for the model. No fallback logic: bad input raises, surfaced upstream. The
+for the model. No fallback logic in the ENGINE: bad input raises; the two order
+tools convert that to a REJECTED message (the model corrects and retries --
+a wrong call must never kill the episode), other tools surface it upstream. The
 week-0 obs is delivered in the kickoff message (runner.kickoff_message), not a
 tool -- a stateful agent already holds every later obs from place_order."""
 
@@ -10,11 +12,18 @@ import json
 from langchain_core.tools import tool
 
 from src.world.engine import HIDDEN_KEYS
-from .service import svc_briefing, svc_lock, svc_step
+from src.world.products import structure
+from .service import (svc_audit, svc_briefing, svc_expedite, svc_inspect,
+                      svc_lock, svc_order_component, svc_step)
 
 
 def make_tools(run):
     """Two tools closed over a run (exposes .world and .record(week,kind,payload))."""
+
+    def _incumbent() -> str:
+        # the supplier you start contracted to (engine.reset): spot in the
+        # masked task, else qualified. Used when place_order omits supplier.
+        return "spot" if run.world.cfg.sup_mask_otif else "qualified"
 
     def _obs_text(obs: dict) -> str:
         # Defensive: the agent must never see hidden state.
@@ -31,6 +40,14 @@ def make_tools(run):
         return f"Analyst briefing (cost {r['cost']}): {r['briefing']}"
 
     @tool
+    def buy_audit() -> str:
+        """Pay for a direct assessment of your spot supplier's CURRENT
+        reliability state, before you commit your order. Optional."""
+        r = svc_audit(run.world)
+        run.record(run.world.week, "buy_audit", r)
+        return f"Supplier audit (cost {r['cost']}): {r['audit']}"
+
+    @tool
     def lock_freight(weeks: int) -> str:
         """Forward-buy the freight rate: FIX this week's freight cost multiplier
         for the next `weeks` weeks (weeks >= 1). While locked you pay the locked
@@ -44,8 +61,67 @@ def make_tools(run):
                 f"weeks. You now pay this rate regardless of spot.")
 
     @tool
+    def expedite_air(qty: int) -> str:
+        """Fly units in on a fast air lane that BYPASSES a jammed destination
+        port: they land in your inventory NEXT week regardless of port congestion,
+        at 15/unit (far dearer than sea, but cheaper than a 20/unit stockout).
+        Capped at 20 units/week. A within-week action: it does NOT advance the
+        week -- expedite, then place_order in the same week. Use it when you
+        believe the port is holding your arrivals (high berth_wait/wait_outlook,
+        or your ship ETAs sliding) and you would otherwise stock out; an unused
+        expedite in a calm week is wasted money."""
+        r = svc_expedite(run.world, qty)
+        run.record(run.world.week, "expedite_air", r)
+        return (f"Air-expedited {r['qty']} units at {r['unit_cost']}/unit; they "
+                f"land next week, bypassing the port.")
+
+    @tool
+    def inspect_batch(supplier: str = "") -> str:
+        """Pay to run an incoming inspection on THIS week's arriving batch: it
+        sorts and reworks the defective units so most are recovered before they
+        reach your inventory (fewer units lost to defects, less rework). A
+        within-week action: it does NOT advance the week -- inspect, then
+        place_order in the same week. Use it when your aql_result has been reading
+        marginal/reject (the supplier's process looks to be drifting) and a
+        defective batch is landing; on a clean run it is wasted money.
+
+        In this world, EACH supplier runs its own process quality -- pass
+        `supplier` ("qualified", "spot", or "backup") to target that supplier's
+        incoming batch; only ITS defects are scaled down, the other suppliers'
+        batches are untouched. One inspection per supplier per week (a repeat
+        call for the same supplier the same week is rejected)."""
+        try:
+            r = svc_inspect(run.world, supplier or None)
+        except ValueError as e:
+            return f"REJECTED: {e}"
+        run.record(run.world.week, "inspect_batch", r)
+        return (f"Inspection ordered (cost {r['fee']:.0f}): sorting this week's "
+                f"batch, recovering ~{r['catch_rate']:.0%} of any defects before "
+                f"they stock.")
+
+    @tool
+    def order_component(component: str, qty: int, supplier: str) -> str:
+        """Stage a component purchase for THIS week (assembly world): buy `qty`
+        units of `component` from `supplier`. Repeat for each component you want
+        to order; they all dispatch together on the route you pass to place_order.
+        A within-week action: it does NOT advance the week -- stage every
+        component order first, then call place_order once to ship them and
+        advance. You assemble finished goods from these components (see the BOM),
+        so keep each component's inventory_position sized to demand over its lead.
+        You may stage from a supplier you have not signed yet IF you sign it in
+        the same week's place_order (the contract resolves before dispatch)."""
+        try:
+            r = svc_order_component(run.world, component, qty, supplier)
+        except ValueError as e:
+            # a wrong call costs the model a correction, never the episode
+            return f"REJECTED (nothing staged): {e}"
+        run.record(run.world.week, "order_component", r)
+        return (f"Staged: {r['qty']} x {r['component']} from {r['supplier']} "
+                f"({r['staged']} order(s) staged this week; place_order ships them).")
+
+    @tool
     def place_order(rationale: str, qty: int, route: str = "",
-                    supplier: str = "qualified", contract_action: str = "",
+                    supplier: str = "", contract_action: str = "",
                     contract_supplier: str = "", contract_terms: str = "") -> str:
         """Commit this week's decision AND/OR manage a supplier contract, then
         advance the world one week. Each week is exactly one call.
@@ -55,7 +131,8 @@ def make_tools(run):
         and sourcing, and say why this qty/route/supplier (and any contract).
         The week does not advance without it; it is your visible thinking.
 
-        Ordering: qty must be 0, 20, or 40. If qty > 0 you MUST pass route
+        Ordering: qty is a whole number of units (0 means order nothing; the
+        cap is order_max). If qty > 0 you MUST pass route
         ("suez" or "cape") and supplier ("qualified", "spot", or "backup").
         You may only source a supplier you hold a LIVE contract with (see
         `contracts` / `contract_open` in the weekly report).
@@ -69,13 +146,18 @@ def make_tools(run):
         ordering. Returns the new week's situation report and whether the
         episode is finished."""
         canonical = route if route else None
-        sup = supplier if qty else None
+        sup = (supplier or _incumbent()) if qty else None
         contract = None
         if contract_action:
             contract = {"action": contract_action,
-                        "supplier": contract_supplier or supplier,
+                        "supplier": contract_supplier or sup or _incumbent(),
                         "terms": contract_terms or None}
-        r = svc_step(run.world, qty, canonical, sup, contract)  # raises on bad input
+        try:
+            r = svc_step(run.world, qty, canonical, sup, contract)
+        except ValueError as e:
+            # bad input: the week does NOT advance and staged component orders
+            # are preserved -- tell the model so it corrects and retries.
+            return (f"REJECTED (week not advanced, staged orders kept): {e}")
         obs = r["obs"]
         run.record(obs.get("week"), "place_order",
                    {"rationale": rationale, "qty": qty, "route": canonical,
@@ -87,8 +169,25 @@ def make_tools(run):
                 f"Week cost {r['cost']}.{tail}\nNew situation:\n{_obs_text(obs)}")
 
     tools = [buy_briefing, place_order]
+    # order_component only exists where there is more than one component to buy
+    # (an assembly/BOM world, e.g. earbuds); a single-component world orders via
+    # place_order's qty and never sees this tool.
+    if len(structure(run.world.cfg.product).component_ids) > 1:
+        tools.insert(1, order_component)
+    # buy_audit only exists in the masked-distress task, where the OTIF scorecard
+    # lags; in the default world the scorecard is noiseless and an audit is moot.
+    if run.world.cfg.sup_mask_otif:
+        tools.insert(1, buy_audit)
     # lock_freight only exists where a freight market does (rich worlds); in the
-    # 2-factor world there is nothing to lock (and the oracle never sees it).
+    # 2-factor world there is nothing to lock.
     if any(m.id == "freight" for m in run.world.registry):
         tools.append(lock_freight)
+    # expedite_air only exists where a destination port does (rich worlds); the
+    # 2-factor/CORE world has no port to expedite around.
+    if any(m.id == "port" for m in run.world.registry):
+        tools.append(expedite_air)
+    # inspect_batch only exists where a quality process does (rich worlds); the
+    # 2-factor/CORE world has no incoming quality to inspect.
+    if any(m.id == "quality" for m in run.world.registry):
+        tools.append(inspect_batch)
     return tools

@@ -5,7 +5,6 @@ research_mode episodes only). Route names are translated
 to/from the episode's semantics vocabulary here (R4) - the engine only
 ever sees canonical names."""
 
-import threading
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,15 +19,13 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.world import World, WorldConfig
-from src.world.oracle import CausalOracle, causal_play
-from src.world.oracle import oracle_plan
 from src.world.substrate.semantics import ROUTE_PARSE
 from src.world.modules.supplier import SUPPLIER_PARSE
-from src.agent.service import svc_briefing, svc_step
-from report_oracle import fixed_policy_cost, base_stock_cost
+from src.agent.service import svc_audit, svc_briefing, svc_step
+from report_oracle import fixed_policy_cost, base_stock_cost, drive_base_stock
 
 from contextlib import asynccontextmanager
 
@@ -89,11 +86,18 @@ class ContractAction(BaseModel):
     terms: str | None = None  # negotiation menu key: short|long|strict|lenient
 
 
+class OrderLine(BaseModel):
+    component: str           # component id (assembly world; canonical, no anon)
+    qty: int = Field(ge=0)   # engine enforces the order_max cap
+    supplier: str            # qualified|spot|backup (or anon source_*)
+
+
 class ActionRequest(BaseModel):
-    qty: Literal[0, 20, 40]
+    qty: int = Field(ge=0)   # free non-negative qty; engine enforces the order_max cap
     route: str | None = None  # vocabulary depends on episode semantics
     supplier: str | None = None  # qualified|spot|backup (or anon source_*)
-    contract: ContractAction | None = None  # sign/renew/switch/lapse a contract
+    contract: ContractAction | None = None  # sign/switch/renew/lapse a contract
+    orders: list[OrderLine] | None = None  # staged component lines (assembly world)
 
 
 class StepResponse(BaseModel):
@@ -104,6 +108,11 @@ class StepResponse(BaseModel):
 
 class BriefingResponse(BaseModel):
     briefing: str
+    cost: float
+
+
+class AuditResponse(BaseModel):
+    audit: str
     cost: float
 
 
@@ -135,17 +144,41 @@ def buy_briefing(episode_id: str) -> BriefingResponse:
     return BriefingResponse(briefing=r["briefing"], cost=r["cost"])
 
 
+@app.post("/episodes/{episode_id}/audit", response_model=AuditResponse)
+def buy_audit(episode_id: str) -> AuditResponse:
+    world = _get(episode_id)
+    if world.done:
+        raise HTTPException(status.HTTP_409_CONFLICT, "episode is done")
+    r = svc_audit(world)
+    return AuditResponse(audit=r["audit"], cost=r["cost"])
+
+
 @app.post("/episodes/{episode_id}/step", response_model=StepResponse)
 def step_episode(episode_id: str, action: ActionRequest) -> StepResponse:
     world = _get(episode_id)
     if world.done:
         raise HTTPException(status.HTTP_409_CONFLICT, "episode is done")
+    # assembly world: stage the component order lines BEFORE stepping (mirrors the
+    # order_component within-week tool). The step then dispatches them on `route`.
+    if action.orders:
+        for line in action.orders:
+            lsup = SUPPLIER_PARSE[world.cfg.semantics].get(line.supplier or "")
+            if lsup is None:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    f"unknown supplier {line.supplier!r} for this episode")
+            try:
+                world.stage_order(line.component, line.qty, lsup)
+            except (ValueError, RuntimeError) as e:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
     route = supplier = None
-    if action.qty:
+    # a route is needed whenever anything ships this week: a bare qty order OR
+    # staged component lines.
+    if action.qty or action.orders:
         route = ROUTE_PARSE[world.cfg.semantics].get(action.route or "")
         if route is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 f"unknown route {action.route!r} for this episode")
+    if action.qty:
         supplier = SUPPLIER_PARSE[world.cfg.semantics].get(action.supplier or "")
         if supplier is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -181,50 +214,20 @@ def episode_xray(episode_id: str) -> dict:
                       for rec in world.trace]}
 
 
-_bench = {"status": "unsolved", "oracle": None, "per_seed": {},
-          "lock": threading.Lock(), "error": None}
-
-
-def _solve_oracle() -> None:
-    try:
-        oracle = CausalOracle(WorldConfig())
-        oracle.value()  # forces the exact solve (~122 s, once per process)
-        _bench["oracle"] = oracle
-        _bench["status"] = "ready"
-    except Exception as exc:  # surfaced as a 500 by the endpoint
-        _bench["error"] = repr(exc)
-        _bench["status"] = "error"
-
-
 @app.get("/benchmark/{seed}")
 def benchmark(seed: int) -> JSONResponse:
     if not (0 <= seed <= 1_000_000_000):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             "seed out of range")
-    with _bench["lock"]:
-        if _bench["status"] == "unsolved":
-            _bench["status"] = "solving"
-            threading.Thread(target=_solve_oracle, daemon=True).start()
-    if _bench["status"] == "solving":
-        return JSONResponse(status_code=202, content={"status": "solving"})
-    if _bench["status"] == "error":
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            f"oracle solve failed: {_bench['error']}")
-    if seed not in _bench["per_seed"]:
-        cfg = WorldConfig()
-        clairvoyant, _plan = oracle_plan(seed, cfg)
-        causal, rows = causal_play(seed, cfg, _bench["oracle"])
-        suez20 = fixed_policy_cost(seed, "suez", cfg)
-        cape20 = fixed_policy_cost(seed, "cape", cfg)
-        basestock = base_stock_cost(seed, cfg)
-        _bench["per_seed"][seed] = {
-            "status": "ready", "seed": seed,
-            "clairvoyant": clairvoyant, "causal": causal,
-            "suez20": suez20, "cape20": cape20, "basestock": basestock,
-            "naive_min": min(suez20, cape20, basestock),
-            "luck_premium": causal - clairvoyant, "plan": rows,
-        }
-    return JSONResponse(content=_bench["per_seed"][seed])
+    cfg = WorldConfig(sup_mask_otif=True)   # match the scored CORE+masked world
+    suez20 = fixed_policy_cost(seed, "suez", cfg)
+    cape20 = fixed_policy_cost(seed, "cape", cfg)
+    w = drive_base_stock(seed, cfg)         # single base-stock driver
+    basestock = w.total_cost
+    return JSONResponse(content={
+        "seed": seed, "suez20": suez20, "cape20": cape20,
+        "basestock": basestock, "basestock_fill": round(w.fill_rate, 3),
+        "naive_min": min(suez20, cape20, basestock)})
 
 
 # ----------------------------------------------------------------------
@@ -241,6 +244,7 @@ from langgraph.types import Command
 
 from src.agent.runner import AgentRun, stream as agent_stream, kickoff_message
 from src.agent.factory import build_agent
+from src.agent.prompt import build_system_prompt
 from src.agent.tools import make_tools
 
 agent_runs: dict[str, AgentRun] = {}
@@ -255,7 +259,8 @@ class AgentRunRequest(BaseModel):
 
 def _build_agent_for(run: AgentRun):
     tools = make_tools(run)
-    return build_agent(run.model_slug, run.mode, tools, app.state.saver)
+    return build_agent(run.model_slug, run.mode, tools, app.state.saver,
+                       build_system_prompt(run.world))
 
 
 @app.post("/agent/runs", status_code=status.HTTP_201_CREATED)

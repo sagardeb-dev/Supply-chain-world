@@ -49,9 +49,9 @@ disruption template, grounded in real supply-chain data.
 
 ## The two emission styles
 
-- **Noiseless (default world).** `disruption` and `supplier` emit deterministic
-  functions of the regime, so reachable beliefs are finitely supported and the
-  exact belief-MDP DP (`oracle/causal.py`) stays tractable.
+- **Noiseless (legacy two-factor base).** `disruption` and `supplier` emit
+  deterministic functions of the regime, so their reachable beliefs are finitely
+  supported.
 - **Noisy (rich modules ③–⑥).** Each new factor emits a *noisy* read plus a
   *forward channel*, with a deliberate one-week onset ambiguity (e.g. promo vs
   seasonal share the `surge` mean; congestion vs customs-hold share a band).
@@ -76,6 +76,5 @@ are inert:
 | `port_blocked` / `demurrage_rate` | `False` / `0.0` |
 | `defect_fraction` / `rework_rate` | `0.0` |
 
-Because every default reproduces the original constant, the **default two-factor
-world is byte-identical** whether or not the effect machinery is present — which
-is what keeps the golden value pinned.
+Because every default reproduces the original constant, the **legacy two-factor
+world is byte-identical** whether or not the effect machinery is present.

@@ -44,16 +44,33 @@ class AgentRun:
     JSONL log on disk so a run can be inspected after the fact."""
 
     def __init__(self, run_id: str, seed: int, model_slug: str, mode: str,
-                 semantics: str = "real", registry=None):
+                 semantics: str = "real", registry=None, masked: bool = True,
+                 product: str = "single"):
         self.run_id = run_id
         self.seed = seed
         self.model_slug = model_slug
         self.mode = mode
         self.semantics = semantics
-        # registry=None -> default 2-factor world; pass registry=RICH for the
-        # full six-module world. The choice lives in the pickled World, so
-        # resume restores the same registry with no extra bookkeeping.
-        self.world = World(WorldConfig(semantics=semantics), registry=registry)
+        # registry=None -> product-dependent default: the scored 3-factor CORE
+        # world (disruption + supplier + demand, masked supplier task on) for
+        # the single-component task, or ASSEMBLY (CORE + per-supplier quality)
+        # for a real assembly product (earbuds) -- Phase 3's scored world; pass
+        # an explicit registry (e.g. RICH) to override either. The choice lives
+        # in the pickled World, so resume restores the same world.
+        from src.world.registry import ASSEMBLY, CORE
+        # the v2 scored world = earbuds assembly + all-drift suppliers (all three
+        # drift on their own personality, so which supplier to source per
+        # component is a real bet) + per-supplier quality (Phase 3: each
+        # supplier's process quality is its own bet too). Direct
+        # WorldConfig(product="earbuds") builds elsewhere (Phase-1 tests) keep
+        # both flags off and stay valid.
+        v2 = product != "single"
+        default_registry = ASSEMBLY if v2 else CORE
+        self.world = World(WorldConfig(semantics=semantics, sup_mask_otif=masked,
+                                       product=product,
+                                       sup_all_drift=v2,
+                                       quality_per_supplier=v2),
+                           registry=default_registry if registry is None else registry)
         self.world.reset(seed)
         self.recorder: list[dict] = []
         self.active = False  # guards against a double stream on reconnect

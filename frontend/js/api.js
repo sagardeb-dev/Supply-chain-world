@@ -20,6 +20,7 @@ export const api = {
   step: (id, qty, route, supplier, contract) =>
     call('POST', `/episodes/${id}/step`, { qty, route, supplier, contract }),
   briefing: (id) => call('POST', `/episodes/${id}/briefing`),
+  audit: (id) => call('POST', `/episodes/${id}/audit`),
   trace: (id) => call('GET', `/episodes/${id}/trace`),
   xray: (id) => call('GET', `/episodes/${id}/xray`),
   benchmark: (seed) => call('GET', `/benchmark/${seed}`),
@@ -94,7 +95,12 @@ export function normalizeObs(obs, semantics) {
       onboardLead: s.onboard_lead ?? 0,
       unitDelta: s.unit_delta != null ? s.unit_delta
         : (s.unit_discount != null ? -s.unit_discount : s.unit_premium),
+      // masked task: the noisy realized-lead-slip sensor (undefined otherwise).
+      // ponytail: passed through; no bespoke panel yet (agent is the consumer).
+      realizedLeadSlip: s.realized_lead_slip,
     })),
+    // masked task: this week's realized fill on a spot order, if one was placed.
+    realizedFill: obs.realized_fill,
     sourcing: sourcingFromPipeline(obs.pipeline, obs.week),
     // contracts (a timer + terms the agent set) and the auto-renewal prompt
     contracts: (obs.contracts ?? []).map((c) => ({

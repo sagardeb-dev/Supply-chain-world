@@ -25,6 +25,7 @@ modules/<name>/ package + its record + one REGISTRY entry here.
 from dataclasses import dataclass
 from typing import Callable
 
+from . import products
 from .modules import demand, disruption, freight, port, quality, supplier
 
 
@@ -36,7 +37,9 @@ class Module:
     kernel: Callable | None       # step(state, rng, cfg) -> state ; None if no hidden state
     emit: Callable                # observe(...) -> {obs_key: value}  -- FLAT, byte-identical to today
     view: Callable                # (cfg) -> {obs_key: {"role", "label"}}  -- presentation manifest
-    drives: tuple[str, ...]       # roster instance ids it advances
+    drives: tuple[str, ...] | Callable  # roster ids it advances, or (cfg) -> ids
+                                  # for product-dependent rosters (demand runs
+                                  # one chain per finished good)
     init: Callable | None = None  # (cfg) -> initial state (singleton) | {id: state} (roster).
                                   # None falls back to state_cls(). The module owns its own
                                   # reset, so the engine stays factor-agnostic.
@@ -51,12 +54,18 @@ def _init_disruption(cfg):
 
 
 def _init_supplier(cfg):
-    # the full roster (all suppliers); the kernel advances only drifting ids.
-    return {sid: supplier.SupplierState() for sid in supplier.SUPPLIERS}
+    # the full roster (all suppliers); the kernel advances only the drifting ids
+    # (DRIVES(cfg)). Each state carries its own sid so step_supplier knows whose
+    # personality kernel to use (Phase 2).
+    return {sid: supplier.SupplierState(sid=sid) for sid in supplier.SUPPLIERS}
 
 
 def _init_demand(cfg):
-    return demand.DemandState()
+    # a per-finished-good roster: one DemandState per model. `single` -> one
+    # stream ("unit"), so its rng draw order is byte-identical to the old
+    # singleton; earbuds -> one stream per model.
+    return {fg: demand.DemandState()
+            for fg in products.structure(cfg.product).finished_goods}
 
 
 def _init_freight(cfg):
@@ -68,6 +77,12 @@ def _init_port(cfg):
 
 
 def _init_quality(cfg):
+    # legacy: the singleton global process (byte-identical). Phase 3
+    # (cfg.quality_per_supplier): a roster, one QualityState per supplier id,
+    # each carrying its own sid so step_quality resolves its own kernel
+    # personality (mirrors _init_supplier).
+    if cfg.quality_per_supplier:
+        return {sid: quality.QualityState(sid=sid) for sid in supplier.SUPPLIERS}
     return quality.QualityState()
 
 
@@ -120,6 +135,12 @@ QUALITY = Module(
 # supplier -- the same order engine.step drew in before the refactor.
 REGISTRY: tuple[Module, ...] = (DISRUPTION, SUPPLIER)
 
+# SCORED world: the 3-factor inventory-management core. Demand is ON so the
+# order-sizing decision carries weight; disruption + supplier keep the lead-time
+# and sourcing pressure. Factors stay in REGISTRY order (rng draw order); the
+# remaining RICH factors (freight, port, quality) APPEND after these.
+CORE: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND)
+
 # RICH world: the multi-factor registry. New factors APPEND after the base two,
 # so their rng draws come last and the disruption/supplier trajectories (and the
 # pinned single-factor golden) are unperturbed. Goal-2 worlds use this (or a
@@ -127,6 +148,14 @@ REGISTRY: tuple[Module, ...] = (DISRUPTION, SUPPLIER)
 # The full six-factor world (goals 2/3). Factors APPEND after the base two, so
 # each new factor's rng draws come last and the disruption-only golden holds.
 RICH: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND, FREIGHT, PORT, QUALITY)
+
+# ASSEMBLY: the v2 scored world (Phase 3) -- CORE (disruption, supplier,
+# demand) plus QUALITY, so the assembly world's cost includes per-supplier
+# process quality/rework alongside the all-drift supplier bet. Quality APPENDS
+# after demand (registry order = rng draw order), so CORE's own trajectory is
+# unperturbed by turning quality on. Used for product != "single" runs (the
+# earbuds/assembly agent harness); freight/port stay RICH-only additions.
+ASSEMBLY: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND, QUALITY)
 
 
 # ponytail: the paid analyst_briefing is deliberately NOT in any module's emit

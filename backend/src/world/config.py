@@ -35,6 +35,24 @@ class WorldConfig:
     # 14.5% of disruptions are supplier failures -> a few % per week from
     # degraded gives a realistic 'distressed -> dead' tail. Absorbing.
     sup_defunct_from_degraded: float = 0.06
+    # Phase 2: when True, ALL THREE suppliers drift, each on its own hidden
+    # reliability chain with its own personality (kernel params live in the
+    # SUPPLIERS profile). Default False keeps the legacy world (only spot drifts;
+    # qualified/backup frozen constants) byte-identical. The v2 scored world
+    # (earbuds assembly) turns this ON so which supplier to source is a real bet.
+    sup_all_drift: bool = False
+    # --- masked-distress task: the spot supplier's OTIF scorecard LAGS its true
+    # reliability (a gameable contractual metric); the timely truth lives in two
+    # noisy "books" channels (realized_fill + realized_lead_slip) and
+    # request_audit() buys a sharpened read of the CURRENT hidden regime. The
+    # skill measured: does the agent mine its own delivery history instead of
+    # trusting the green scorecard. The agent harness turns this ON; the flag
+    # only stays False here so the legacy single-shot supplier tests still run.
+    sup_mask_otif: bool = False
+    audit_cost: float = 25.0              # paid supplier audit; tune vs runs (VOI knob)
+    sup_lead_slip_sd: float = 2.5         # noise sd of the realized-lead-slip sensor
+    sup_fill_sd: float = 0.12             # noise sd of the realized-fill draw (so a
+                                          # single partial fill no longer IDs the regime)
     # --- supplier economics ---
     spot_unit_discount: float = 1.5       # S is 1.5/unit cheaper than Q's lane cost
     qualified_premium: float = 1.0        # Q adds 1.0/unit over the route base cost
@@ -100,6 +118,13 @@ class WorldConfig:
     port_wait_noise_sd: float = 2.0        # sd of the realized berth-wait days
     port_outlook_sd: float = 3.0           # sd of the forward outlook (noisier)
     port_demurrage_rate: float = 2.0       # demurrage cost per held unit per week
+    # air-expedite lever (Rec #3): fly units in on a separate fast-lane that
+    # bypasses the blocked port, landing next week. Priced BETWEEN sea (4-6/unit)
+    # and a stockout (20/unit) so it's a real decision -- not a default, not a
+    # dead letter. ponytail: both are calibration knobs the tuning workflow will
+    # sweep; the values below are a grounded starting point, not final.
+    air_unit_cost: float = 15.0            # per unit flown in (dearer than sea, < stockout)
+    air_weekly_cap: int = 20               # most you can fly per week (= one week's demand)
 
     # --- supplier-quality semi-Markov kernel (latent module #6, RICH worlds only) ---
     # Unused unless the quality module is in the registry. Process drift is
@@ -116,6 +141,20 @@ class WorldConfig:
     # the regime off the arrived/rework delta. Gamma multiplier, mean 1.0,
     # CV = 1/sqrt(shape); shape 2.0 -> CV ~0.71 (adjacent regimes overlap).
     q_defect_shape: float = 2.0
+    # Phase 3: when True, EACH supplier runs its OWN quality process (kernel
+    # params live in the SUPPLIERS "quality" profile, cheap supplier tuned
+    # worse) instead of one shared global process. Default False keeps the
+    # legacy world (one shared quality chain, cfg.q_* fields) byte-identical.
+    # The v2 scored assembly world turns this ON alongside sup_all_drift.
+    quality_per_supplier: bool = False
+    # incoming-inspection lever (quality): pay a FLAT fee to sort/rework this week's
+    # arriving batch, recovering a fraction of its defects before they hit the books
+    # (supplier-containment framing -- caught units are replaced, so both the
+    # shortfall and the rework drop). Real 3rd-party inspection is ~$300-500 FLAT per
+    # batch and <=80% effective (never perfect). ponytail: both are calibration knobs
+    # the tuning workflow will sweep; grounded starting points, not final.
+    inspect_fee: float = 40.0            # flat, per week inspected (NOT per unit)
+    inspect_catch_rate: float = 0.7      # fraction of this batch's defects recovered (<1)
 
     # --- voyage geometry (transit-week causality) ---
     suez_total_weeks: int = 3             # ~28 days Shanghai-Rotterdam
@@ -128,8 +167,13 @@ class WorldConfig:
 
     # --- demand & costs ---
     weekly_demand: int = 20
-    order_quantities: tuple = (0, 20, 40)  # no order / one ship / two ships
+    order_max: int = 100  # free order-qty cap; ~5 weeks of mean demand, generous
+                          # enough not to bind a sane base-stock. Calibration knob.
     initial_inventory: int = 80
+    # product structure (assembly world): selects the bill of materials in
+    # products.py. "single" = degenerate one-component 1:1 (legacy physics);
+    # "earbuds" = the scored v2 assembly line (2 models, 3 shared/specific parts).
+    product: str = "single"
     suez_unit_cost: float = 4.0
     cape_unit_cost: float = 6.0           # ~1.5x Suez operating cost
     holding_cost: float = 1.0             # per unit per week, on-hand AND in-transit

@@ -19,7 +19,7 @@ win.
 | `POST /episodes/{id}/briefing` | Buy the paid lane briefing (within-week, no advance). |
 | `GET /episodes/{id}/trace` | The full per-week trace so far. |
 | `GET /episodes/{id}/xray` | The hidden tape — **research mode only**, off for benchmark runs. |
-| `GET /benchmark/{seed}` | The oracle / benchmark summary for a seed. |
+| `GET /benchmark/{seed}` | Baseline benchmark for a seed: suez20, cape20, base-stock cost + fill, naive_min. |
 
 **Watch an LLM agent play:**
 

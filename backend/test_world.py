@@ -22,13 +22,24 @@ from src.world.modules.supplier import (Contract, SupplierState, TERM_MENU,
                                         contract_open, observe_scorecard,
                                         step_supplier, terms_for)
 from src.world.engine import HIDDEN_KEYS
+from src.world.products import structure
 from src.world.substrate import Books, resolve_week
-from src.world.oracle import arrival_week, hidden_trajectory, oracle_plan
-from src.world.oracle import (EMPTY_PIPE, CausalOracle, canonical,
-                              causal_play, resolve_rel, transition_dist)
 
 
 CFG = WorldConfig()
+
+
+def _rw(books, qty, supplier, route, h, sup, week, cfg, effects=None):
+    """Legacy-shape adapter for the single-component white-box tests. Wraps the
+    old scalar (qty, supplier, sup) call into the new order-line + roster
+    resolve_week, and returns (arrived_total, costs) exactly like the old
+    2-tuple -- so every existing assertion below is preserved byte-for-byte."""
+    orders = ([{"component": "unit", "qty": qty, "supplier": supplier}]
+              if qty else [])
+    roster = {supplier: sup} if supplier else {}
+    arrived, _served, _short, costs = resolve_week(
+        books, orders, route, h, roster, week, cfg, effects)
+    return sum(arrived.values()), costs
 
 
 def run_episode(seed, routes=("suez",), qty=20):
@@ -69,7 +80,7 @@ def sail(weekly_hidden, orders=None, supplier="qualified", sup=None):
     costs = []
     for week, h in enumerate(weekly_hidden, start=1):
         qty, route = orders[week - 1] if orders else (20, "suez")
-        _, c = resolve_week(books, qty, supplier, route, h, sup, week, CFG)
+        _, c = _rw(books, qty, supplier, route, h, sup, week, CFG)
         if first is None:
             first = next((s for s in books.pipeline if s.dispatched_week == 1), None)
         costs.append(c)
@@ -267,10 +278,24 @@ def test_step_validation():
     world = World()
     world.reset(1)
     with pytest.raises(ValueError):
-        world.step({"qty": 30, "route": "suez"})
+        world.step({"qty": -5, "route": "suez", "supplier": "qualified"})
     with pytest.raises(ValueError):
         world.step({"qty": 20})  # qty > 0 needs a route
     world.step({"qty": 0})       # no route needed
+
+
+def test_free_quantity_accepts_and_bounds():
+    """Order qty is a free non-negative integer capped at order_max -- the
+    {0,20,40} menu is gone; off-grid quantities are legal, out-of-range raise."""
+    world = World()
+    world.reset(1)
+    world.step({"qty": 30, "route": "suez", "supplier": "qualified"})  # off-grid: legal now
+    assert world.books.pipeline[-1].qty == 30
+    with pytest.raises(ValueError):
+        world.step({"qty": -5, "route": "suez", "supplier": "qualified"})
+    with pytest.raises(ValueError):
+        world.step({"qty": world.cfg.order_max + 1, "route": "suez",
+                    "supplier": "qualified"})
 
 
 def test_bulletin_present_and_matches_regime():
@@ -336,43 +361,6 @@ def test_trace_completeness():
         assert {"week", "hidden", "action", "obs", "cost"} <= rec.keys()
 
 
-def test_oracle_arrivals_match_engine():
-    for seed in (1, 7, 12):
-        traj = hidden_trajectory(seed, CFG)
-        for route in ("suez", "cape"):
-            world = World()
-            world.reset(seed)
-            while not world.done:
-                world.step({"qty": 20, "supplier": "qualified", "route": route})
-            landed = {}
-            for rec in world.trace[1:]:
-                for s in rec["obs"]["pipeline"]:
-                    landed[s["dispatched_week"]] = s["eta"]
-                for d in list(landed):
-                    a = arrival_week(route, d, traj, CFG)
-                    if a is not None and a <= rec["week"]:
-                        assert a == landed[d]
-
-
-def test_oracle_dp_matches_engine_replay():
-    for seed in (1, 2, 7, 12, 17):
-        cost, plan = oracle_plan(seed, CFG)
-        world = World()
-        world.reset(seed)
-        for qty, route in plan:
-            world.step({"qty": qty, "supplier": "qualified", "route": route}
-                       if qty else {"qty": 0})
-        assert world.done
-        assert abs(world.total_cost - cost) < 1e-6, f"seed {seed}"
-
-
-def test_oracle_uses_quantity_lever():
-    # With the 80-unit starting buffer and a 3-week lead, ordering 20
-    # every single week cannot be optimal - the oracle must burn buffer.
-    _, plan = oracle_plan(1, CFG)
-    assert any(q != 20 for q, _ in plan)
-
-
 def test_api_episode_lifecycle():
     client = TestClient(app)
     r = client.post("/episodes", json={"seed": 9})
@@ -420,93 +408,6 @@ def test_api_briefing_and_anon_episode():
     assert ok.json()["obs"]["cost_breakdown"]["briefing"] == CFG.briefing_cost
 
 
-# --- causal-aware oracle (the benchmark anchor) --------------------------
-
-
-@pytest.fixture(scope="module")
-def causal():
-    return CausalOracle(CFG)
-
-
-def test_transition_dist_matches_sampler():
-    """The DP's exact kernel must agree with transition.step_hidden."""
-    rng = random.Random(0)
-    cores = [("calm", 0, None), ("watch", 0, None),
-             ("disruption", 0, "short"), ("disruption", 1, "short"),
-             ("disruption", 0, "long"), ("disruption", 1, "long"),
-             ("recovery", 0, None), ("recovery", 1, None),
-             ("recovery", 2, None), ("false_alarm", 0, None)]
-    n = 20000
-    for core in cores:
-        dist = dict(transition_dist(core, CFG))
-        assert abs(sum(dist.values()) - 1) < 1e-12
-        seen = {}
-        h = HiddenState(*core)
-        for _ in range(n):
-            h2 = step_hidden(h, rng, CFG)
-            k = canonical((h2.event_state, h2.event_age,
-                           h2.disruption_type), CFG)
-            seen[k] = seen.get(k, 0) + 1
-        assert set(seen) == set(dist), core
-        for k, p in dist.items():
-            assert abs(seen[k] / n - p) < 0.02, (core, k)
-
-
-def test_resolve_rel_mirrors_resolve_week():
-    """The DP's relative pipeline encoding must reproduce the real Books
-    machinery week by week on randomized hidden paths and orders."""
-    rng = random.Random(42)
-    for trial in range(60):
-        books = Books(inventory=CFG.initial_inventory)
-        pipe, inv = EMPTY_PIPE, CFG.initial_inventory
-        h = HiddenState()
-        for week in range(1, CFG.horizon_weeks + 1):
-            h = step_hidden(h, rng, CFG)
-            qty = rng.choice(CFG.order_quantities)
-            route = rng.choice(("suez", "cape")) if qty else None
-            arrived, costs = resolve_week(books, qty,
-                                          "qualified" if qty else None,
-                                          route, h, SupplierState(), week, CFG)
-            core = (h.event_state, h.event_age, h.disruption_type)
-            pipe, inv, arrived2, cost2 = resolve_rel(
-                pipe, inv, qty, route, core, h.cape_local_congestion, CFG)
-            assert arrived2 == arrived, (trial, week)
-            assert inv == books.inventory, (trial, week)
-            assert abs(cost2 - sum(costs.values())) < 1e-9, (trial, week)
-
-
-def test_causal_oracle_within_bounds(causal):
-    """Clairvoyance is luck-inclusive: the causal oracle can never beat
-    it on any seed. causal_play also self-checks every step (obs-group
-    uniqueness, cost and inventory agreement with the engine), and the
-    belief support must never exceed the three crash-week atoms."""
-    for seed in range(1, 9):
-        cost, rows = causal_play(seed, oracle=causal)
-        clair, _ = oracle_plan(seed, CFG)
-        assert cost >= clair - 1e-6, seed
-        assert all(r["belief_support"] <= 3 for r in rows), seed
-
-
-def test_causal_oracle_value_pinned(causal):
-    """GOLDEN PIN: the benchmark anchor's ex-ante expected cost under the
-    optimal causal policy (WorldConfig() defaults). Captured empirically
-    2026-06-18. A refactor that changes world behavior moves this number,
-    and that is otherwise the one SILENT failure mode -- a wrong oracle
-    with no crash. Do NOT 'update' this literal without understanding why
-    it moved."""
-    assert causal.value() == 4251.9607875333395
-
-
-def test_causal_cost_pinned(causal):
-    """GOLDEN PIN: realized causal-oracle cost on fixed seeds (the live
-    engine played from observations only, each step cross-checked against
-    the DP). Locks end-to-end engine+oracle behavior, not just value()."""
-    expected = {1: 4280.0, 2: 4360.0, 3: 5700.0, 7: 4580.0, 11: 3940.0}
-    for seed, want in expected.items():
-        cost, _ = causal_play(seed, oracle=causal)
-        assert cost == want, seed
-
-
 # --- research surface (read-only API for the explainer UI) ---------------
 
 def test_xray_gating_and_content():
@@ -537,26 +438,16 @@ def test_xray_gating_and_content():
     assert "event_state" in client.get(f"/episodes/{aid}/xray").json()["weeks"][0]
 
 
-def test_benchmark_endpoint(causal):
-    """The benchmark anchor set for a seed. The 122 s solve is bypassed by
-    injecting the module-scoped causal fixture as the cached oracle."""
-    import src.api.app as appmod
-
-    saved = appmod._bench
-    appmod._bench = {"status": "ready", "oracle": causal, "per_seed": {},
-                     "lock": saved["lock"], "error": None}
-    try:
-        client = TestClient(app)
-        body = client.get("/benchmark/3").json()
-        assert body["status"] == "ready" and body["seed"] == 3
-        assert body["causal"] >= body["clairvoyant"] - 1e-6
-        assert body["naive_min"] == min(body["suez20"], body["cape20"],
-                                        body["basestock"])
-        assert body["luck_premium"] == body["causal"] - body["clairvoyant"]
-        assert len(body["plan"]) == CFG.horizon_weeks
-        assert client.get("/benchmark/-1").status_code == 422
-    finally:
-        appmod._bench = saved
+def test_benchmark_returns_baselines_no_oracle():
+    """/benchmark serves base-stock + fixed-policy baselines and a fill rate,
+    synchronously, with no oracle fields."""
+    with TestClient(app) as client:
+        r = client.get("/benchmark/7")
+        assert r.status_code == 200
+        body = r.json()
+        assert {"seed", "basestock", "suez20", "cape20", "naive_min",
+                "basestock_fill"} <= body.keys()
+        assert "causal" not in body and "luck_premium" not in body
 
 
 def test_service_parity():
@@ -576,7 +467,8 @@ def test_service_parity():
 
 def test_agent_tools_gating():
     """Tools mirror the 3 actions, leak no hidden state, and refuse a
-    qty>0 order with no route (no fallback)."""
+    qty>0 order with no route (no fallback in the ENGINE; the tool surfaces
+    the rejection as text so the model corrects instead of dying)."""
     from src.agent.tools import make_tools
     from src.world.engine import HIDDEN_KEYS
 
@@ -601,10 +493,13 @@ def test_agent_tools_gating():
     assert "briefing" in out.lower()
     assert any(k == "buy_briefing" for _, k in run.events)
 
-    # qty>0 with no route raises (no default route)
-    with pytest.raises(Exception):
-        place_order.invoke({"rationale": "t", "qty": 20,
-                            "supplier": "qualified", "route": ""})
+    # qty>0 with no route is REJECTED (no default route) as a tool message --
+    # the engine raised, the tool relayed, and the week did NOT advance.
+    before = run.world.week
+    out = place_order.invoke({"rationale": "t", "qty": 20,
+                              "supplier": "qualified", "route": ""})
+    assert "REJECTED" in out and "route" in out
+    assert run.world.week == before
 
     # a valid order advances the world one week and records the event
     before = run.world.week
@@ -622,14 +517,16 @@ def test_resume_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(runnermod, "RUNS_DIR", tmp_path)
     from src.agent.runner import AgentRun
 
-    run = AgentRun("test-run", seed=3, model_slug="x", mode="autonomous")
+    run = AgentRun("test-run", seed=3, model_slug="x", mode="autonomous",
+                   masked=False)  # plumbing test: simple qualified-incumbent world
     # advance the World two weeks through the same path the tools use
     run.world.step({"qty": 20, "supplier": "qualified", "route": "suez"})
     run.world.step({"qty": 0, "route": None})
     run.save()
 
     # a reference World driven identically, NOT pickled
-    ref = AgentRun("ref-run", seed=3, model_slug="x", mode="autonomous")
+    ref = AgentRun("ref-run", seed=3, model_slug="x", mode="autonomous",
+                   masked=False)
     ref.world.step({"qty": 20, "supplier": "qualified", "route": "suez"})
     ref.world.step({"qty": 0, "route": None})
 
@@ -663,7 +560,7 @@ def test_agent_sse_mock(monkeypatch):
                             tool_call_id="c1")]}})
 
     monkeypatch.setattr(appmod, "build_agent",
-                        lambda slug, mode, tools, ckpt: FakeAgent())
+                        lambda slug, mode, tools, ckpt, sysprompt=None: FakeAgent())
 
     with TestClient(appmod.app) as client:  # context -> runs lifespan (sqlite saver)
         r = client.post("/agent/runs",
@@ -714,8 +611,8 @@ def test_place_order_event_carries_obs(tmp_path, monkeypatch):
 
     # a real run + a genuine place_order event in the recorder
     run = AgentRun("po-run", seed=3, model_slug="x", mode="autonomous",
-                   semantics="real")
-    buy_briefing, place_order = make_tools(run)
+                   semantics="real", masked=False)  # plumbing: simple world
+    place_order = next(t for t in make_tools(run) if t.name == "place_order")
     place_order.invoke({"rationale": "stock up, lane calm", "qty": 20,
                         "supplier": "qualified", "route": "suez"})
     assert run.recorder and run.recorder[-1]["kind"] == "place_order"
@@ -985,10 +882,10 @@ def test_unit_economics_spot_cheaper_qualified_dearer():
     """Spot undercuts the lane unit cost by spot_unit_discount; qualified
     adds qualified_premium. Compared on the SHIPPED qty (reliable -> full)."""
     books_q = Books(inventory=CFG.initial_inventory)
-    _, cq = resolve_week(books_q, 40, "qualified", "suez", CALM,
+    _, cq = _rw(books_q, 40, "qualified", "suez", CALM,
                          SupplierState(), 1, CFG)
     books_s = Books(inventory=CFG.initial_inventory)
-    _, cs = resolve_week(books_s, 40, "spot", "suez", CALM,
+    _, cs = _rw(books_s, 40, "spot", "suez", CALM,
                          SupplierState(), 1, CFG)
     base = CFG.suez_unit_cost * 40
     assert cq["shipping"] == base + CFG.qualified_premium * 40
@@ -1002,9 +899,9 @@ def test_couple_surcharge_only_when_disruption_active():
     # wobbling spot: orders 40, ships 20 -> shortfall 20
     sup = SupplierState(rel_state="wobbling")
     books_calm = Books(inventory=CFG.initial_inventory)
-    _, c_calm = resolve_week(books_calm, 40, "spot", "suez", CALM, sup, 1, CFG)
+    _, c_calm = _rw(books_calm, 40, "spot", "suez", CALM, sup, 1, CFG)
     books_watch = Books(inventory=CFG.initial_inventory)
-    _, c_watch = resolve_week(books_watch, 40, "spot", "suez", WATCH, sup, 1, CFG)
+    _, c_watch = _rw(books_watch, 40, "spot", "suez", WATCH, sup, 1, CFG)
     assert c_calm.get("couple", 0.0) == 0.0
     expected = CFG.crisis_backorder_kappa * (40 - 20)
     assert c_watch["couple"] == expected
@@ -1014,11 +911,11 @@ def test_couple_no_surcharge_for_qualified_or_full_spot():
     """No shortfall -> no coupling, even in a crisis week."""
     CRISIS = HiddenState("disruption", 1, "long")
     books_q = Books(inventory=CFG.initial_inventory)
-    _, cq = resolve_week(books_q, 40, "qualified", "suez", CRISIS,
+    _, cq = _rw(books_q, 40, "qualified", "suez", CRISIS,
                          SupplierState(rel_state="degraded", rel_age=1), 1, CFG)
     assert cq.get("couple", 0.0) == 0.0  # qualified ships full
     books_s = Books(inventory=CFG.initial_inventory)
-    _, cs = resolve_week(books_s, 40, "spot", "suez", CRISIS,
+    _, cs = _rw(books_s, 40, "spot", "suez", CRISIS,
                          SupplierState(), 1, CFG)  # reliable spot ships full
     assert cs.get("couple", 0.0) == 0.0
 
@@ -1273,32 +1170,133 @@ def test_hard_gap_defunct_spot_leaves_you_stuck():
     assert "spot" not in w._contracted_suppliers()
 
 
-# --- module contract: the registry declaration (structural refactor) -------
-
-def test_registry_covers_exactly_the_two_factors():
-    """Two latent modules, no more. The iid cape-local coin is a THIRD
-    stochastic root but it lives INSIDE the disruption module's emission
-    (observe_counts), not as its own module -- 'two modules' != 'two
-    stochastic roots'. Pin the count and the ids so a stray module can't
-    sneak in."""
-    from src.world.registry import REGISTRY
-    assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
-    # order is load-bearing (rng draw order = exogeneity); pin it explicitly
-    assert REGISTRY[0].kernel is step_hidden
-    assert REGISTRY[1].kernel is step_supplier
-    # both are noiseless latent factors
-    assert all(m.kind == "latent-factor" for m in REGISTRY)
-
-
 def test_supplier_module_drives_only_drifting_roster_ids():
-    """The supplier module advances exactly the roster ids whose profile
-    sets drifts=True (only spot in R1), read from SUPPLIERS -- no literal
-    'spot' in the module record."""
+    """The supplier module's drives is a callable of cfg (Phase 2): legacy
+    (sup_all_drift off) advances only spot; the all-drift world advances all
+    three, spot FIRST (rng append discipline). No literal 'spot' branch in the
+    module record -- the engine resolves the callable in _advance_modules."""
     from src.world.registry import SUPPLIER
-    from src.world.modules.supplier import SUPPLIERS
-    assert SUPPLIER.drives == tuple(sid for sid, p in SUPPLIERS.items()
-                                    if p["drifts"])
-    assert SUPPLIER.drives == ("spot",)
+    assert callable(SUPPLIER.drives)
+    assert SUPPLIER.drives(WorldConfig()) == ("spot",)
+    assert SUPPLIER.drives(WorldConfig(sup_all_drift=True)) == (
+        "spot", "qualified", "backup")
+
+
+# --- Phase 2: all three suppliers drift, each with its own personality --------
+
+def test_personalities_distinct():
+    """With sup_all_drift ON, each supplier drifts on its OWN kernel: spot is the
+    cheap/volatile one, qualified premium/steady, backup mid. Count degraded+
+    defunct weeks per supplier over many seeds and assert the ordering with a
+    material gap (a personality check, not a calibration pin)."""
+    cfg = WorldConfig(sup_all_drift=True)
+    counts = {"spot": 0, "qualified": 0, "backup": 0}
+    for seed in range(40):
+        w = World(cfg)
+        w.reset(seed)
+        while not w.done:
+            w.step({"qty": 0})                       # kernel runs unconditionally
+            for sid in counts:
+                if w.suppliers[sid].rel_state in ("degraded", "defunct"):
+                    counts[sid] += 1
+    # spot is materially the most distressed; qualified the least; backup between
+    assert counts["spot"] >= 2 * counts["qualified"], counts
+    assert counts["qualified"] < counts["backup"] < counts["spot"], counts
+
+
+def test_all_drift_flag_gates_rng():
+    """The flag gates the drift, and spot draws FIRST (rng append discipline).
+
+    (a) Flag OFF (default): qualified/backup NEVER leave 'reliable' -- frozen,
+        and no extra rng is drawn (legacy byte-identity, pinned by the wider
+        suite's golden/trace tests).
+    (b) Spot draws FIRST: with the flag ON the drives order is
+        ('spot', 'qualified', 'backup') -- spot, NOT dict-order's 'qualified',
+        is advanced first -- so spot's WEEK-1 draw is not displaced by the
+        appended suppliers and its week-1 state matches the flag-OFF world.
+
+    CAVEAT (see report): because the engine advances every driver from the ONE
+    shared self.rng with no engine change (per the design mandate), the appended
+    qualified/backup draws DO shift the shared stream for LATER weeks, so spot's
+    FULL multi-week trajectory is not identical across the flag -- only its
+    week-1 prefix is. Full-trajectory identity would require a separate appended
+    rng stream (an engine change the brief forbids)."""
+    from src.world.registry import SUPPLIER
+    assert SUPPLIER.drives(WorldConfig(sup_all_drift=True))[0] == "spot"
+    for seed in range(10):
+        off = World(WorldConfig())
+        off.reset(seed)
+        on = World(WorldConfig(sup_all_drift=True))
+        on.reset(seed)
+        # (b) week-1: spot advances first, so its state is unchanged by the flag.
+        off.step({"qty": 0})
+        on.step({"qty": 0})
+        assert off.suppliers["spot"].rel_state == on.suppliers["spot"].rel_state
+        # (a) flag OFF freezes qualified/backup for the whole horizon.
+        assert off.suppliers["qualified"].rel_state == "reliable"
+        assert off.suppliers["backup"].rel_state == "reliable"
+        while not off.done:
+            off.step({"qty": 0})
+            assert off.suppliers["qualified"].rel_state == "reliable"
+            assert off.suppliers["backup"].rel_state == "reliable"
+
+
+def test_short_ship_starves_assembly():
+    """earbuds + all-drift: a PARTIAL dock-fill from a wobbling sourced supplier
+    (ships ~half) lands fewer components, and when that scarce component binds
+    the BOM the finished good is served < demand. Compared against a healthy
+    (full-ship) source over the same schedule: less arrives -> less is served
+    -> a real assembly shortfall."""
+    cfg = WorldConfig(product="earbuds", sup_all_drift=True)
+    prod = structure("earbuds")
+
+    def run(spot_state):
+        books = Books(components={cid: 0 for cid in prod.component_ids})
+        rost = {sid: SupplierState(sid=sid)
+                for sid in ("qualified", "spot", "backup")}
+        rost["spot"] = spot_state
+        rows = []                                    # (arrived, served, short) totals
+        for week in range(1, 9):
+            orders = ([{"component": cid, "qty": 40, "supplier": "spot"}
+                       for cid in prod.component_ids] if week == 1 else [])
+            a, s, sh, _ = resolve_week(books, orders, "suez", CALM, rost, week, cfg)
+            rows.append((sum(a.values()), sum(s.values()), sum(sh.values())))
+        return rows
+
+    healthy = run(SupplierState(sid="spot"))                       # ships full
+    wobbling = run(SupplierState(rel_state="wobbling", sid="spot"))  # ships ~half
+    arr_h = sum(a for a, _, _ in healthy)
+    arr_w = sum(a for a, _, _ in wobbling)
+    srv_h = sum(s for _, s, _ in healthy)
+    srv_w = sum(s for _, s, _ in wobbling)
+    short_w = sum(sh for _, _, sh in wobbling)
+    # the partial fill lands strictly fewer components than a full ship (>0)
+    assert 0 < arr_w < arr_h, (arr_w, arr_h)
+    # ...which starves assembly: fewer finished goods served, a real shortfall
+    assert srv_w < srv_h and short_w > 0, (srv_w, srv_h, short_w)
+
+
+def test_scorecard_reflects_all_three():
+    """Flag ON, the obs scorecard rows for qualified AND backup show NON-constant
+    bands over the horizon on seeds where they drift -- proof the scorecard now
+    reflects all three suppliers' hidden chains, not just spot's."""
+    cfg = WorldConfig(sup_all_drift=True)
+
+    def multi_band(sid):
+        for seed in range(20):
+            w = World(cfg)
+            w.reset(seed)
+            seen = set()
+            while not w.done:
+                obs = w.step({"qty": 0})[0]
+                seen.add(next(r for r in obs["suppliers"]
+                              if r["id"] == sid)["band"])
+            if len(seen) > 1:
+                return True
+        return False
+
+    assert multi_band("qualified"), "qualified's scorecard band must vary"
+    assert multi_band("backup"), "backup's scorecard band must vary"
 
 
 def test_disruption_emit_byte_identical_to_handbuilt_obs():
@@ -1421,15 +1419,6 @@ def test_view_labels_never_leak_real_names_in_anon():
 
 # --- module 3: demand (first goal-2 factor; RICH world only; noisy v2) -----
 
-def test_demand_only_in_rich_registry():
-    """The default world is the pinned 2-factor world; demand appears only in
-    RICH (which also carries later factors) -- never in the default registry."""
-    from src.world.registry import REGISTRY, RICH
-    assert tuple(m.id for m in REGISTRY) == ("disruption", "supplier")
-    assert "demand" in {m.id for m in RICH}
-    assert "demand" not in {m.id for m in REGISTRY}
-
-
 def test_demand_band_onset_ambiguity():
     """The deliberate 1-week ambiguity (mirrors disruption 'crash'): promo and
     seasonal ONSET (age 0) share the 'surge' MEAN -> indistinguishable in
@@ -1450,8 +1439,11 @@ def test_demand_emit_is_noisy_pos_plus_forecast_no_leak():
     the state), and NOTHING that leaks the hidden regime/age."""
     from src.world.modules.demand import DemandState, emit
     st = DemandState("seasonal_lift", 2, realized=33, forecast=28)
-    assert emit(st, CFG) == {"pos_units": 33, "demand_forecast": 28}
-    assert not ({"regime", "regime_age", "band"} & set(emit(st, CFG)))
+    # emit now takes the per-finished-good roster; a degenerate single-model
+    # roster emits the FLAT legacy keys byte-for-byte.
+    roster = {"unit": st}
+    assert emit(roster, CFG) == {"pos_units": 33, "demand_forecast": 28}
+    assert not ({"regime", "regime_age", "band"} & set(emit(roster, CFG)))
 
 
 def test_demand_realized_is_noisy_around_the_mean():
@@ -1500,7 +1492,8 @@ def test_rich_world_demand_drives_consumption_and_is_deterministic():
         w = World(registry=RICH); w.reset(seed)
         while not w.done:
             w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
-            bands.add(w.module_states["demand"].band)
+            # demand is now a per-finished-good roster; `single` -> one stream.
+            bands.add(w.module_states["demand"]["unit"].band)
     assert {"surge", "seasonal", "promo", "depressed"} <= bands
 
 
@@ -1509,14 +1502,6 @@ def test_rich_world_obs_has_forward_forecast_channel():
     from src.world.registry import RICH
     w = World(registry=RICH); obs = w.reset(7)
     assert "pos_units" in obs and "demand_forecast" in obs
-
-
-def test_default_world_demand_inert():
-    """Inert-by-absence: the default world has no demand module, no pos_units,
-    and consumes the constant cfg.weekly_demand."""
-    w = World(); obs = w.reset(3)
-    assert "demand" not in w.module_states
-    assert "pos_units" not in obs
 
 
 # --- module 4: freight (noisy spot rate; cost-multiplier effect; RICH only) -
@@ -1554,13 +1539,13 @@ def test_freight_effect_scales_route_cost():
     """The freight effect multiplies the route base rate in resolve_week; a spike
     multiplier costs strictly more than normal for the same order."""
     from src.world.substrate.books import Books
-    base = resolve_week(Books(80), 20, "qualified", "suez", HiddenState(),
+    base = _rw(Books(80), 20, "qualified", "suez", HiddenState(),
                         SupplierState(), 1, CFG, effects={"freight_mult": 1.0})[1]
-    spike = resolve_week(Books(80), 20, "qualified", "suez", HiddenState(),
+    spike = _rw(Books(80), 20, "qualified", "suez", HiddenState(),
                          SupplierState(), 1, CFG, effects={"freight_mult": 4.0})[1]
     assert spike["shipping"] > base["shipping"]
     # default world (no effects) == freight_mult 1.0 (byte-identical)
-    none = resolve_week(Books(80), 20, "qualified", "suez", HiddenState(),
+    none = _rw(Books(80), 20, "qualified", "suez", HiddenState(),
                         SupplierState(), 1, CFG)[1]
     assert none["shipping"] == base["shipping"]
 
@@ -1678,11 +1663,11 @@ def test_port_blocked_holds_arrivals_and_charges_demurrage():
         b.pipeline = [Shipment(20, "suez", 2, "qualified", arrives_week=5)]
         return b
     clear_b = due()
-    arrived, costs = resolve_week(clear_b, 0, None, None, HiddenState(),
+    arrived, costs = _rw(clear_b, 0, None, None, HiddenState(),
                                   SupplierState(), 5, CFG, effects={})
     assert arrived == 20 and "demurrage" not in costs and not clear_b.pipeline
     block_b = due()
-    arrived, costs = resolve_week(
+    arrived, costs = _rw(
         block_b, 0, None, None, HiddenState(), SupplierState(), 5, CFG,
         effects={"port_blocked": True, "demurrage_rate": CFG.port_demurrage_rate})
     assert arrived == 0
@@ -1720,6 +1705,49 @@ def test_rich_world_port_deterministic_and_demurrage_occurs():
             o, _, _, _ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
             charged += "demurrage" in o["cost_breakdown"]
     assert charged > 0
+
+
+def test_expedite_air_adds_inventory_and_bills_capped():
+    """expedite_air is a within-week action (no advance) that flies units in on a
+    fast lane bypassing the port: they land in inventory the next step (capped at
+    air_weekly_cap) and are billed at air_unit_cost; a step with no expedite has
+    no air cost line."""
+    from src.world.registry import RICH
+    def stepped(expedite):
+        w = World(registry=RICH); w.reset(3)
+        if expedite:
+            conf = w.expedite_air(1000)             # ask for more than the cap
+            assert w.week == 0                      # within-week: does not advance
+            assert conf["qty"] == CFG.air_weekly_cap
+        o, _, _, _ = w.step({"qty": 0, "route": None, "supplier": None})
+        return w, o
+    w_air, o_air = stepped(True)
+    w_base, o_base = stepped(False)
+    # the flown units (capped) land as extra inventory after the same step
+    assert w_air.books.inventory - w_base.books.inventory == CFG.air_weekly_cap
+    assert o_air["cost_breakdown"]["air"] == pytest.approx(
+        CFG.air_unit_cost * CFG.air_weekly_cap)
+    assert "air" not in o_base["cost_breakdown"]
+    # air_inbound is set-and-consumed inside the step -> always 0 at an obs point
+    assert w_air.books.air_inbound == 0
+
+
+def test_expedite_air_tool_only_in_rich_world():
+    """expedite_air exists only where a destination port does; the 2-factor world
+    keeps its two-tool surface (and the oracle never sees an air lever)."""
+    from src.agent.tools import make_tools
+    from src.world.registry import RICH
+
+    class FakeRun:
+        def __init__(self, registry):
+            self.world = World(registry=registry); self.world.reset(3)
+        def record(self, *a):
+            pass
+
+    base = [t.name for t in make_tools(FakeRun(None))]
+    rich = [t.name for t in make_tools(FakeRun(RICH))]
+    assert base == ["buy_briefing", "place_order"]
+    assert "expedite_air" in rich
 
 
 # --- module 6: quality (NOISY discrete AQL emission; RICH only) ------------
@@ -1761,11 +1789,11 @@ def test_quality_defect_reduces_usable_arrivals_and_charges_rework():
         b.pipeline = [Shipment(40, "suez", 2, "qualified", arrives_week=5)]
         return b
     clean = due()
-    arrived, costs = resolve_week(clean, 0, None, None, HiddenState(),
+    arrived, costs = _rw(clean, 0, None, None, HiddenState(),
                                   SupplierState(), 5, CFG, effects={})
     assert arrived == 40 and "rework" not in costs
     defq = due()
-    arrived, costs = resolve_week(
+    arrived, costs = _rw(
         defq, 0, None, None, HiddenState(), SupplierState(), 5, CFG,
         effects={"defect_fraction": 0.10, "rework_rate": CFG.quality_rework_cost})
     assert arrived == 36                                   # 4 of 40 defective
@@ -1832,3 +1860,643 @@ def test_rich_cost_keyset_does_not_leak_hidden_state():
     o2, _, _, _ = w2.step({"qty": 20, "route": "suez", "supplier": "qualified"})
     assert "demurrage" not in o2["cost_breakdown"]
     assert "rework" not in o2["cost_breakdown"]
+
+
+def test_inspect_batch_tool_only_in_rich_world():
+    """inspect_batch exists only where a quality process does; the 2-factor world
+    keeps its two-tool surface (and the oracle never sees an inspection lever)."""
+    from src.agent.tools import make_tools
+    from src.world.registry import RICH
+
+    class FakeRun:
+        def __init__(self, registry):
+            self.world = World(registry=registry); self.world.reset(3)
+        def record(self, *a):
+            pass
+
+    base = [t.name for t in make_tools(FakeRun(None))]
+    rich = [t.name for t in make_tools(FakeRun(RICH))]
+    assert base == ["buy_briefing", "place_order"]
+    assert "inspect_batch" in rich
+
+
+def test_inspect_batch_cuts_rework_and_bills():
+    """inspect_batch is a within-week action (no advance) that scales down THIS
+    week's defect fraction, so a defective batch lands with fewer bad units and
+    less rework. inspect is within-week and consumes no rng, so an inspect-run and
+    a no-inspect-run on the same seed stay rng-aligned and differ ONLY by the
+    discount. Seed 7 drifts at least once over the horizon (base rework > 0)."""
+    from src.world.registry import RICH
+
+    def episode(inspect):
+        w = World(registry=RICH); w.reset(7)
+        total_rework, saw_fee = 0.0, False
+        while not w.done:
+            if inspect:
+                before = w.week
+                conf = w.inspect_batch()
+                assert w.week == before          # within-week: did not advance
+                assert conf["fee"] == CFG.inspect_fee
+            o, _, _, _ = w.step({"qty": 40, "route": "cape", "supplier": "qualified"})
+            total_rework += o["cost_breakdown"].get("rework", 0.0)
+            saw_fee |= o["cost_breakdown"].get("inspect", 0.0) == CFG.inspect_fee
+        return total_rework, saw_fee
+
+    ins_rework, ins_fee = episode(True)
+    base_rework, base_fee = episode(False)
+    assert base_rework > 0            # the seed actually exercises quality
+    assert ins_rework < base_rework   # inspection recovered defects -> less rework
+    assert ins_fee and not base_fee   # fee billed only when inspected
+
+
+# --- masked-distress supplier task (cfg.sup_mask_otif) -----------------------
+
+MASKED = WorldConfig(sup_mask_otif=True)
+
+
+def _spot_row(rel_state, rel_age=0, lead_slip=0.0, cfg=MASKED):
+    rows = observe_scorecard(
+        {"spot": SupplierState(rel_state, rel_age, lead_slip)}, cfg)["suppliers"]
+    return rows[0]
+
+
+def test_mask_otif_lags_true_regime():
+    """The masked scorecard reads healthier than the truth: a wobble and the
+    onset of degradation both still show 'ontime'; only deep failure surfaces
+    (as a mild 'slipping'), and death always shows. The legacy world is
+    byte-identical (true band, no lead-slip key)."""
+    assert _spot_row("wobbling")["band"] == "ontime"        # a slip reads on-time
+    assert _spot_row("degraded", 0)["band"] == "ontime"     # onset hidden
+    assert _spot_row("degraded", 1)["band"] == "slipping"   # deep fail -> "slip"
+    assert _spot_row("defunct")["band"] == "defunct"        # death always shows
+    assert _spot_row("wobbling", lead_slip=4.2)["realized_lead_slip"] == 4.2
+    legacy = _spot_row("wobbling", cfg=WorldConfig())
+    assert legacy["band"] == "slipping" and legacy["otif"] == 82
+    assert "realized_lead_slip" not in legacy
+
+
+def test_audit_reveals_true_band_and_charges_once():
+    w = World(MASKED); w.reset(7)
+    w.suppliers["spot"] = SupplierState("degraded", 1)   # truly failing
+    txt = w.request_audit()
+    assert "failing" in txt                              # names the TRUE band
+    assert w.request_audit() == txt                      # cached, same week
+    w.step({"qty": 0})
+    assert w.trace[-1]["obs"]["cost_breakdown"].get("audit") == w.cfg.audit_cost
+
+
+def test_realized_fill_present_only_on_spot_order():
+    w = World(MASKED); w.reset(7)        # masked task starts contracted to spot
+    obs, *_ = w.step({"qty": 40, "supplier": "spot", "route": "suez"})
+    assert obs["realized_fill"] == w.suppliers["spot"].fulfilled_fraction
+    obs2, *_ = w.step({"qty": 0})        # absent when you didn't source spot
+    assert "realized_fill" not in obs2
+
+
+def test_masked_fill_is_noisy_not_deterministic():
+    """Masked task: realized fill is a noisy per-week draw, so a single fill no
+    longer pins the regime -- a healthy supplier can have an unlucky (<1.0) week.
+    Legacy keeps the deterministic lookup (reliable==1.0 exactly)."""
+    from src.world.modules.supplier import step_supplier
+    rng = random.Random(3)
+    fills, s = [], SupplierState()
+    for _ in range(60):
+        s = step_supplier(s, rng, MASKED)
+        if s.rel_state == "reliable":
+            fills.append(s.fulfilled_fraction)
+    assert fills, "no reliable weeks sampled"
+    assert any(f < 1.0 for f in fills) and all(0.0 <= f <= 1.0 for f in fills)
+    assert SupplierState("reliable").fulfilled_fraction == 1.0   # legacy exact
+
+
+def test_masked_starts_on_spot_not_qualified():
+    """The masked task inverts the incumbent: you begin contracted to spot
+    (evergreen), and qualified is an opt-in migration target."""
+    w = World(MASKED); w.reset(7)
+    assert w._contracted_suppliers() == {"spot"}
+    # legacy world is unchanged: starts on qualified
+    lw = World(); lw.reset(7)
+    assert lw._contracted_suppliers() == {"qualified"}
+
+
+def test_masked_obs_no_hidden_leak():
+    w = World(MASKED); w.reset(7)
+    obs, *_ = w.step({"qty": 20, "supplier": "spot", "route": "suez"})
+    assert not (HIDDEN_KEYS & obs.keys())                # engine guard holds
+    spot = next(r for r in obs["suppliers"] if "realized_lead_slip" in r)
+    assert "rel_state" not in spot and "rel_age" not in spot  # row carries no regime
+
+
+def test_masked_flag_off_draws_no_extra_rng():
+    """Flag OFF must not perturb the supplier trajectory (no lead-slip draw), so
+    the legacy world stays a function of the seed alone."""
+    legacy = [SupplierState().rel_state]
+    w = World(); w.reset(11)
+    while not w.done:
+        w.step({"qty": 0})
+        legacy.append(w.suppliers["spot"].rel_state)
+    w2 = World(); w2.reset(11)
+    seq = [SupplierState().rel_state]
+    while not w2.done:
+        w2.step({"qty": 0})
+        seq.append(w2.suppliers["spot"].rel_state)
+    assert legacy == seq  # deterministic, unaffected by the masked-task code
+
+
+def test_core_registry_runs_stochastic_demand():
+    """CORE = (disruption, supplier, demand): the scored world emits a NOISY
+    weekly POS that varies week to week (demand is no longer flat), and never
+    leaks the hidden demand regime."""
+    from src.world.registry import CORE
+    assert [m.id for m in CORE] == ["disruption", "supplier", "demand"]
+    w = World(WorldConfig(), registry=CORE)
+    w.reset(7)
+    pos = []
+    while not w.done:
+        obs, *_ = w.step({"qty": 0})
+        assert "pos_units" in obs               # demand channel is live
+        assert not (HIDDEN_KEYS & obs.keys())   # regime stays hidden
+        pos.append(obs["pos_units"])
+    assert len(set(pos)) > 1                     # stochastic, not the flat constant
+
+
+def test_supplier_economics_read_profile_not_spot_literal():
+    """resolve_week keys off the supplier PROFILE, not the "spot" literal:
+    backup prices via its econ delta (+0.3, previously mis-billed as qualified's
+    +1.0), and a drifting supplier still short-ships per its fulfilled_fraction."""
+    from src.world.substrate.logistics import resolve_week
+    from src.world.substrate.books import Books
+    from src.world.modules.disruption import HiddenState
+    from src.world.modules.supplier import SupplierState
+    cfg = WorldConfig()
+    # backup: non-drifting, econ delta +0.3 over the Suez base (4.0) -> 4.3/unit.
+    books = Books(inventory=80)
+    _arrived, costs = _rw(books, 20, "backup", "suez", HiddenState(),
+                                   SupplierState(), week=0, cfg=cfg)
+    assert costs["shipping"] == 20 * (cfg.suez_unit_cost + cfg.backup_unit_delta)
+    # a drifting supplier (degraded) ships short, driven by its state, not "spot".
+    books2 = Books(inventory=80)
+    degraded = SupplierState(rel_state="degraded")     # fulfilled_fraction 0.0
+    _a2, _c2 = _rw(books2, 20, "spot", "suez", HiddenState(),
+                            degraded, week=0, cfg=cfg)
+    assert books2.pipeline == []                        # 0 units shipped
+
+
+def test_inventory_position_and_fill_rate():
+    """inventory_position = on_hand + on_order (lost-sales, no backorders); the
+    run-level fill_rate = served/demanded is well-formed."""
+    from src.world.registry import CORE
+    w = World(WorldConfig(), registry=CORE)
+    obs = w.reset(7)
+    assert obs["inventory_position"] == obs["inventory"] + obs["on_order"] == 80
+    while not w.done:
+        obs, *_ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+        on_order = sum(s["qty"] for s in obs["pipeline"])
+        assert obs["on_order"] == on_order
+        assert obs["inventory_position"] == obs["inventory"] + on_order
+    assert 0.0 <= w.fill_rate <= 1.0
+    assert w.demand_total > 0 and w.served_total <= w.demand_total
+
+
+def test_base_stock_beats_flat_ladder_under_demand():
+    """On the CORE world (noisy demand), the order-up-to-S base-stock policy
+    (free qty, service-level S) costs less than the flat always-20 ladder --
+    the whole point of making the inventory decision carry weight."""
+    from report_oracle import base_stock_cost, fixed_policy_cost
+    cfg = WorldConfig()
+    seeds = range(1, 11)
+    bstock = sum(base_stock_cost(s, cfg) for s in seeds) / 10
+    flat = sum(fixed_policy_cost(s, "suez", cfg) for s in seeds) / 10
+    assert bstock < flat
+
+
+def test_prompt_reframes_buffer_and_default_supplier():
+    """The CORE prompt sizes a buffer toward the implied service target, no
+    longer steers against buffers, and does not offer the freight lever it
+    lacks; an omitted supplier defaults to the incumbent instead of raising."""
+    from src.world.registry import CORE
+    from src.agent.prompt import build_system_prompt
+    w = World(WorldConfig(), registry=CORE); w.reset(7)
+    p = build_system_prompt(w)
+    assert "{0, 20, 40}" not in p                        # old qty menu gone
+    assert "inventory_position" in p                     # sizing variable described
+    assert "do not carry a big buffer" not in p          # anti-buffer steer gone
+    assert "95%" in p                                    # service target stated
+    assert "lock_freight(weeks)" not in p                # freight lever stripped (CORE)
+    assert "expedite_air(qty)" not in p                  # port lever stripped (CORE)
+    # default supplier resolves to the incumbent (qualified here) -> no raise
+    class _Run:
+        world = w
+        def record(self, *a, **k): pass
+    from src.agent.tools import make_tools
+    place = next(t for t in make_tools(_Run()) if t.name == "place_order")
+    out = place.invoke({"rationale": "buffer up", "qty": 20, "route": "suez"})
+    assert "supplier=qualified" in out
+
+
+# --- assembly / BOM world -------------------------------------------------
+# The earbuds product: standard = battery + chip_std, pro = battery + chip_pro
+# (battery shared). Assemble-to-order on the scored CORE registry (per-model
+# stochastic demand). These pin the new substrate; the single product above
+# reproduces the legacy scalar physics byte-for-byte (all tests before this
+# section pass unchanged).
+
+EARBUDS = WorldConfig(product="earbuds")
+
+
+def _earbuds_world(seed=1, registry=None):
+    from src.world.registry import CORE
+    w = World(EARBUDS, registry=CORE if registry is None else registry)
+    w.reset(seed)
+    return w
+
+
+def test_assembly_gated_by_scarce_component():
+    """chip_pro short but battery/chip_std plentiful: `standard` assembles fully,
+    `pro` only up to the chips it has (the material-requirements constraint)."""
+    prod = structure("earbuds")
+    books = Books(components={"battery": 100, "chip_std": 100, "chip_pro": 3})
+    arrived, served, short, costs = resolve_week(
+        books, [], None, HiddenState(), {}, 1, EARBUDS,
+        effects={"demand": {"standard": 20, "pro": 20}})
+    assert served["standard"] == 20                 # standard fully assembled
+    assert served["pro"] == 3                        # pro gated by chip_pro
+    assert short["pro"] == 17 and short["standard"] == 0
+    # explicit shortfall drives the stockout cost (not back-derived)
+    assert costs["stockout"] == EARBUDS.stockout_cost * 17
+
+
+def test_shared_battery_contention_cuts_both_models():
+    """A shortage of the SHARED battery cuts BOTH models' served counts, split
+    across them (the contention that makes the assembly interesting)."""
+    books = Books(components={"battery": 10, "chip_std": 100, "chip_pro": 100})
+    _a, served, short, _c = resolve_week(
+        books, [], None, HiddenState(), {}, 1, EARBUDS,
+        effects={"demand": {"standard": 20, "pro": 20}})
+    assert served["standard"] < 20 and served["pro"] < 20   # both starved
+    assert served["standard"] + served["pro"] == 10         # bound by batteries
+    assert short["standard"] > 0 and short["pro"] > 0
+
+
+def test_earbuds_demand_roster_two_independent_noisy_streams():
+    """Per-finished-good demand: the roster has 2 models, each a NOISY stream,
+    and the two streams are independent (different draws) -- never a hidden leak."""
+    w = _earbuds_world(7)
+    assert set(w.module_states["demand"]) == {"standard", "pro"}   # 2-FG roster
+    std, pro = [], []
+    while not w.done:
+        obs, *_ = w.step({"qty": 0})               # hold; demand still drifts + serves
+        assert not (HIDDEN_KEYS & obs.keys())       # regimes stay hidden
+        std.append(obs["demand"]["standard"]["pos_units"])
+        pro.append(obs["demand"]["pro"]["pos_units"])
+    assert len(set(std)) > 1 and len(set(pro)) > 1  # both genuinely stochastic
+    assert std != pro                                # two independent streams
+
+
+def test_earbuds_per_component_inventory_position():
+    """obs['components'] carries per-component on_hand / on_order /
+    inventory_position, with a staged order showing as that component's on_order."""
+    w = _earbuds_world(3)
+    w.stage_order("battery", 30, "qualified")
+    obs, *_ = w.step({"route": "suez"})
+    comps = obs["components"]
+    assert set(comps) == set(structure("earbuds").component_ids)
+    for c in comps.values():
+        assert c["inventory_position"] == c["on_hand"] + c["on_order"]
+    assert comps["battery"]["on_order"] == 30       # the staged battery is in flight
+
+
+def test_stage_order_does_not_advance_and_tool_gating():
+    """stage_order is within-week (no advance); order_component is exposed ONLY
+    in a multi-component world, never in a single-component one."""
+    from src.agent.tools import make_tools
+    from src.world.registry import CORE
+    w = _earbuds_world(1)
+    r = w.stage_order("chip_pro", 20, "qualified")
+    assert w.week == 0 and r["staged"] == 1         # staged, did not advance
+
+    class _Run:
+        world = w
+        def record(self, *a, **k): pass
+    assert "order_component" in {t.name for t in make_tools(_Run())}
+
+    w1 = World(WorldConfig(), registry=CORE); w1.reset(1)   # single-component
+
+    class _Run1:
+        world = w1
+        def record(self, *a, **k): pass
+    assert "order_component" not in {t.name for t in make_tools(_Run1())}
+
+
+def test_earbuds_explicit_served_shortfall_sum_to_fill_rate():
+    """The explicit per-model served/shortfall returns (not a back-derivation)
+    aggregate into a well-formed run-level fill rate."""
+    w = _earbuds_world(5)
+    while not w.done:
+        w.step({"qty": 0})
+    assert 0.0 <= w.fill_rate <= 1.0
+    assert w.demand_total > 0 and w.served_total <= w.demand_total
+    assert w.fill_rate == w.served_total / w.demand_total
+
+
+def test_component_base_stock_beats_flat_on_earbuds():
+    """A per-component order-up-to-S base-stock (S_c from the critical ratio on
+    each component's demand/lead) beats the demand-blind flat ladder on cost
+    under noisy demand -- the assembly baseline has teeth."""
+    from report_oracle import (_fill_by_fg, drive_component_base_stock,
+                               flat_component_policy_cost)
+    cfg = WorldConfig(product="earbuds")
+    seeds = range(1, 11)
+    bstock = sum(drive_component_base_stock(s, cfg).total_cost for s in seeds) / 10
+    flat = sum(flat_component_policy_cost(s, cfg) for s in seeds) / 10
+    assert bstock < flat
+    # ...and the result is reportable PER FINISHED GOOD (plan gate #4).
+    fills = _fill_by_fg(drive_component_base_stock(1, cfg))
+    assert set(fills) == {"standard", "pro"}
+    assert all(0.0 <= f <= 1.0 for f in fills.values())
+
+
+def test_stage_then_sign_same_week():
+    """The live-run regression: stage component orders from a supplier you have
+    NOT signed yet, then sign it in the same week's step (contract resolves
+    before dispatch) -- the staged lines ship. Without the sign, step raises
+    and the staged lines survive for the corrected retry."""
+    from src.world.registry import CORE
+    w = World(WorldConfig(product="earbuds", sup_mask_otif=True),
+              registry=CORE)                      # masked: contracted to spot only
+    w.reset(8)
+    w.stage_order("battery", 30, "qualified")     # staging must NOT require the contract
+    with pytest.raises(ValueError):
+        w.step({"route": "suez"})                 # unsigned -> step rejects...
+    assert len(w.books.staged_orders) == 1        # ...and the line survives
+    w.step({"route": "suez", "contract": {"action": "sign",
+                                          "supplier": "qualified", "terms": None}})
+    assert not w.books.staged_orders
+    assert [(s.component, s.qty, s.supplier) for s in w.books.pipeline] == \
+        [("battery", 30, "qualified")]            # signed + sourced in one week
+
+
+def test_failed_step_preserves_staged_orders():
+    """A step that fails validation (e.g. a missing route) must NOT consume the
+    staged component orders -- the corrected retry still dispatches them. And a
+    bare qty alongside staged lines raises instead of being silently dropped."""
+    w = _earbuds_world(2)
+    w.stage_order("battery", 30, "qualified")
+    w.stage_order("chip_pro", 20, "qualified")
+    with pytest.raises(ValueError):
+        w.step({})                                    # forgot the route
+    assert len(w.books.staged_orders) == 2            # lines survived the failure
+    with pytest.raises(ValueError):
+        w.step({"qty": 15, "route": "suez", "supplier": "qualified"})
+    assert len(w.books.staged_orders) == 2            # qty+staged rejected, kept
+    w.step({"route": "suez"})                         # corrected retry
+    assert not w.books.staged_orders                  # consumed on success
+    assert sum(s.qty for s in w.books.pipeline) == 50  # BOTH lines dispatched
+
+
+def test_earbuds_deterministic_exogenous_and_no_leak():
+    """Same seed -> same earbuds trace; the component order CHOICE never moves
+    the hidden disruption tape (exogeneity); no hidden state leaks into obs."""
+    def run(order):
+        w = _earbuds_world(11)
+        while not w.done:
+            if order:
+                w.stage_order("battery", 40, "qualified")
+            w.step({"route": "suez"} if order else {"qty": 0})
+        return w
+    a, b = run(False), run(False)
+    assert a.trace == b.trace                        # determinism
+    c = run(True)                                    # orders every week
+    assert [r["hidden"] for r in a.trace] == [r["hidden"] for r in c.trace]
+    for rec in c.trace:
+        assert not (HIDDEN_KEYS & rec["obs"].keys())
+
+
+def test_single_product_back_compat_obs_keys():
+    """The degenerate single product keeps the legacy scalar obs keys AND adds
+    a components map with the sole `unit` bin (back-compat by construction)."""
+    w = World(); obs = w.reset(3)                    # default 2-factor single
+    assert obs["inventory"] == 80 and obs["on_order"] == 0
+    assert list(obs["components"]) == ["unit"]
+    assert obs["components"]["unit"]["on_hand"] == 80
+    obs, *_ = w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+    assert obs["inventory"] == obs["components"]["unit"]["on_hand"]
+
+
+def test_earbuds_no_llm_smoke():
+    """No-LLM smoke (Phase-1 gate #6): build an earbuds world, stage a few
+    component orders, step with a route, and assert per-component obs +
+    a per-model served line appear (the substrate is wired end to end)."""
+    w = _earbuds_world(8)
+    w.stage_order("battery", 40, "qualified")
+    w.stage_order("chip_std", 20, "qualified")
+    w.stage_order("chip_pro", 20, "qualified")
+    assert w.week == 0                               # staging did not advance
+    obs, cost, done, _ = w.step({"route": "suez"})
+    assert set(obs["components"]) == {"battery", "chip_std", "chip_pro"}
+    assert set(obs["served"]) == {"standard", "pro"}          # per-model served line
+    assert obs["components"]["battery"]["on_order"] == 40     # staged lines in flight
+    assert obs["components"]["chip_pro"]["on_order"] == 20
+    assert cost > 0 and not done
+
+
+def test_earbuds_prompt_has_assembly_framing_single_unchanged():
+    """The multi-component prompt gains an ASSEMBLY / order_component framing;
+    the single-component prompt stays byte-identical to SYSTEM_PROMPT-derived."""
+    from src.agent.prompt import build_system_prompt, SYSTEM_PROMPT
+    from src.world.registry import CORE
+    we = _earbuds_world(1)
+    pe = build_system_prompt(we)
+    assert "ASSEMBLY" in pe and "order_component(component, qty, supplier)" in pe
+    assert "battery" in pe and "chip_pro" in pe          # BOM drawn from products
+    # single-component CORE world: assembly framing absent (byte-identical strip)
+    ws = World(WorldConfig(), registry=CORE); ws.reset(1)
+    assert "ASSEMBLY (this is a components/BOM world" not in build_system_prompt(ws)
+
+
+# --- Phase 3: per-supplier quality --------------------------------------
+
+QPS = WorldConfig(product="earbuds", quality_per_supplier=True)
+
+
+def test_per_supplier_defect_attribution():
+    """Phase 3: a per-supplier defect_fraction map (roster quality) charges
+    each landing shipment ONLY its OWN shipper's realized fraction, not a
+    global one -- and a dirty supplier (spot) accumulates materially more
+    scrapped units than a clean one (qualified) shipping the same size batch,
+    over many weeks of the real per-supplier quality kernels."""
+    from src.world.modules.quality import QualityState, step_quality
+    from src.world.substrate.books import Shipment
+
+    rng = random.Random(11)
+    prod = structure("earbuds")
+    roster = {sid: QualityState(sid=sid) for sid in ("spot", "qualified", "backup")}
+    spot_defective = qualified_defective = 0
+    for week in range(1, 41):
+        roster = {sid: step_quality(roster[sid], rng, QPS) for sid in roster}
+        eff = {"defect_fraction": {sid: s.realized_defect for sid, s in roster.items()},
+               "rework_rate": QPS.quality_rework_cost}
+        spot_frac = roster["spot"].realized_defect
+        qual_frac = roster["qualified"].realized_defect
+
+        # Attribution check (the coupled part of this test): resolve a landing
+        # from ONE supplier at a time, in isolation, and read the engine's own
+        # `arrived` output -- it must reflect exactly that shipper's own
+        # fraction (the engine's own round(qty*frac) formula), not the other
+        # supplier's, not a global one.
+        spot_books = Books(components={cid: 0 for cid in prod.component_ids})
+        spot_books.pipeline.append(Shipment(50, "suez", week - 1, "spot",
+                                            component="battery", arrives_week=week))
+        arrived_spot, *_ = resolve_week(spot_books, [], None, CALM, {}, week, QPS,
+                                        effects=eff)
+        assert arrived_spot["battery"] == 50 - round(50 * spot_frac)
+        assert spot_books.components["battery"] == 50 - round(50 * spot_frac)
+
+        qual_books = Books(components={cid: 0 for cid in prod.component_ids})
+        qual_books.pipeline.append(Shipment(50, "suez", week - 1, "qualified",
+                                            component="battery", arrives_week=week))
+        arrived_qual, *_ = resolve_week(qual_books, [], None, CALM, {}, week, QPS,
+                                        effects=eff)
+        assert arrived_qual["battery"] == 50 - round(50 * qual_frac)
+        assert qual_books.components["battery"] == 50 - round(50 * qual_frac)
+
+        spot_defective += 50 - arrived_spot["battery"]
+        qualified_defective += 50 - arrived_qual["battery"]
+    assert spot_defective > qualified_defective * 2, (spot_defective, qualified_defective)
+
+
+def test_defect_scrap_starves_assembly():
+    """A heavily defective landing of the SHARED component (battery) cuts
+    served units for BOTH finished goods (assemble-to-order starves on the
+    scrapped shortfall, exactly like a short-ship supplier would)."""
+    prod = structure("earbuds")
+    books = Books(components={cid: 0 for cid in prod.component_ids})
+    from src.world.substrate.books import Shipment
+    books.pipeline.append(Shipment(20, "suez", 0, "spot", component="battery",
+                                   arrives_week=1))
+    eff = {"defect_fraction": {"spot": 0.9, "qualified": 0.0, "backup": 0.0},
+           "rework_rate": QPS.quality_rework_cost,
+           "demand": {"standard": 20, "pro": 20}}
+    _a, served, short, costs = resolve_week(
+        books, [], None, CALM, {}, 1, QPS, effects=eff)
+    # 90% of the 20-unit battery batch scraps -> only ~2 usable -> both models starve
+    assert served["standard"] < 20 and served["pro"] < 20
+    assert short["standard"] > 0 and short["pro"] > 0
+    assert costs["rework"] > 0
+
+
+def test_inspect_targets_one_supplier():
+    """Two suppliers' batches land the same week; inspect_batch(supplier)
+    targets ONE -- only that supplier's defects drop, the other's rework is
+    unchanged, the week does not advance, the fee is charged once, and a
+    duplicate inspect of the same supplier the same week is rejected."""
+    from src.world.registry import ASSEMBLY
+    from src.world.substrate.books import Shipment
+
+    # -- engine-level: no-advance, fee-once, duplicate-reject --------------
+    w = World(QPS, registry=ASSEMBLY)
+    w.reset(2)                          # incumbent: qualified (sup_mask_otif off)
+    r = w.inspect_batch("spot")
+    assert r["fee"] == w.cfg.inspect_fee
+    assert w.week == 0                                  # within-week: no advance
+    assert w.books.inspected_suppliers == {"spot"}
+    with pytest.raises(ValueError):
+        w.inspect_batch("spot")                         # duplicate rejected
+    assert w.books.inspected_suppliers == {"spot"}       # unchanged by the reject
+    obs, cost, done, _ = w.step({"qty": 0, "route": None})
+    assert w.week == 1
+    # exactly one inspect fee billed this week (one call, despite the duplicate reject)
+    assert obs["cost_breakdown"]["inspect"] == w.cfg.inspect_fee
+
+    # -- substrate-level: only the inspected supplier's fraction is scaled --
+    prod = structure("earbuds")
+    raw = {"spot": 0.4, "qualified": 0.4}      # same true fraction for both
+    scaled = dict(raw)
+    scaled["spot"] *= (1 - QPS.inspect_catch_rate)   # only spot inspected
+    eff_scaled = {"defect_fraction": scaled, "rework_rate": QPS.quality_rework_cost}
+    eff_raw = {"defect_fraction": raw, "rework_rate": QPS.quality_rework_cost}
+
+    # inspected run: both suppliers land, spot's fraction is the SCALED one.
+    books = Books(components={cid: 0 for cid in prod.component_ids})
+    books.pipeline.append(Shipment(50, "suez", 0, "spot", component="battery",
+                                   arrives_week=1))
+    books.pipeline.append(Shipment(50, "suez", 0, "qualified", component="battery",
+                                   arrives_week=1))
+    resolve_week(books, [], None, CALM, {}, 1, QPS, effects=eff_scaled)
+    inspected_battery = books.components["battery"]
+
+    # uninspected baseline run: identical shipments, but both suppliers land
+    # at their RAW (uncaught) fraction -- isolates what the inspect scaling
+    # bought, straight off books.components.
+    books_baseline = Books(components={cid: 0 for cid in prod.component_ids})
+    books_baseline.pipeline.append(Shipment(50, "suez", 0, "spot", component="battery",
+                                            arrives_week=1))
+    books_baseline.pipeline.append(Shipment(50, "suez", 0, "qualified",
+                                            component="battery", arrives_week=1))
+    resolve_week(books_baseline, [], None, CALM, {}, 1, QPS, effects=eff_raw)
+    baseline_battery = books_baseline.components["battery"]
+
+    # the inspected run recovers exactly the units the catch rate saved on
+    # spot's batch alone (qualified's raw-fraction loss is unchanged in both
+    # runs, so the whole delta between the two totals is spot's).
+    spot_savings = round(50 * raw["spot"]) - round(50 * scaled["spot"])
+    assert spot_savings > 0
+    assert inspected_battery - baseline_battery == spot_savings
+
+    # per-shipment isolation: qualified's own landing is byte-identical
+    # whether or not spot was inspected (engine's own round(qty*frac)).
+    qual_only = Books(components={cid: 0 for cid in prod.component_ids})
+    qual_only.pipeline.append(Shipment(50, "suez", 0, "qualified",
+                                       component="battery", arrives_week=1))
+    resolve_week(qual_only, [], None, CALM, {}, 1, QPS, effects=eff_raw)
+    assert qual_only.components["battery"] == 50 - round(50 * raw["qualified"])
+
+
+def test_quality_in_scored_assembly_obs():
+    """The earbuds run on the ASSEMBLY registry (Phase 3's scored world): obs
+    carries a per-supplier `aql_result`, the cost breakdown gains `rework`
+    when a defective batch lands, and the leak-guard still holds (no hidden
+    quality regime ever surfaces)."""
+    from src.world.registry import ASSEMBLY
+    assert [m.id for m in ASSEMBLY] == ["disruption", "supplier", "demand", "quality"]
+    prod = structure("earbuds")
+
+    found_rework = False
+    for seed in range(1, 8):
+        w = World(QPS, registry=ASSEMBLY)
+        obs = w.reset(seed)
+        assert isinstance(obs["aql_result"], dict)
+        assert set(obs["aql_result"]) == {"spot", "qualified", "backup"}
+        assert not (HIDDEN_KEYS & obs.keys())
+        for week in range(1, 27):
+            for cid in prod.component_ids:
+                w.stage_order(cid, 30, "qualified")
+            obs, cost, done, _ = w.step({"route": "suez"})
+            assert not (HIDDEN_KEYS & obs.keys())
+            assert isinstance(obs["aql_result"], dict)
+            if obs["cost_breakdown"].get("rework", 0) > 0:
+                found_rework = True
+            if done:
+                break
+        if found_rework:
+            break
+    assert found_rework, "no defective batch landed across 7 seeds (seed unlucky?)"
+
+
+def test_legacy_quality_untouched():
+    """flag OFF (default WorldConfig): the RICH-world singleton quality process
+    behaves byte-identically -- one QualityState with sid=='', drives==('',),
+    and step_quality resolves the SAME cfg.q_* fields as before Phase 3."""
+    from src.world.modules.quality import QualityState, DRIVES, step_quality
+    cfg = WorldConfig()
+    assert DRIVES(cfg) == ("",)
+    q = QualityState()
+    assert q.sid == ""
+    q2 = step_quality(q, random.Random(5), cfg)
+    ref = step_quality(QualityState(), random.Random(5), cfg)
+    assert q2 == ref
+    from src.world.registry import RICH, _init_quality
+    assert isinstance(_init_quality(cfg), QualityState)  # singleton, not a roster
+    w = World(cfg, registry=RICH); w.reset(9)
+    assert isinstance(w.module_states["quality"], QualityState)
+    assert isinstance(w._build_obs(arrived=0, costs={})["aql_result"], str)
