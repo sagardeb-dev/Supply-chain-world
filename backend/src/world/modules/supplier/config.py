@@ -55,9 +55,16 @@ SUPPLIER_FILL_MEAN = {
 # declares everything the scorecard row needs, so _supplier_row has no
 # instance-name branch and adding supplier #4 is one entry ("Nth costs the
 # same as 2nd").
-#   drifts       -- True: OTIF/lead/band read from the SupplierState chain;
-#                   False: show the constant otif/lead below, band "ontime".
-#   otif/lead    -- frozen suppliers' constants (None for a drifting one).
+#   kernel       -- per-supplier reliability-kernel personality (Phase 2). None
+#                   => fall back to the global cfg.sup_* fields (spot's legacy
+#                   behaviour AND the calibration surface for the drifting-spot
+#                   tasks). A dict => this supplier's own transition params. WHO
+#                   actually drifts in a given world is DRIVES(cfg), not this
+#                   table: with sup_all_drift off only spot drifts; with it on
+#                   all three do, each reading its own kernel here.
+#   otif/lead    -- frozen-display constants shown when this supplier is NOT
+#                   drifting in this world (None for one whose row is always a
+#                   live regime read, i.e. spot).
 #   onboard_weeks-- weeks before this supplier's FIRST order can ship.
 #   econ         -- unit economics vs the route base cost. "attr" names the
 #                   WorldConfig field holding the magnitude (cfg stays the
@@ -65,13 +72,22 @@ SUPPLIER_FILL_MEAN = {
 #                   logistics/oracle reads the SAME fields). "sign" is the
 #                   direction of unit_delta; "key" is the extra display key
 #                   (unit_discount / unit_premium), or None for just a delta.
+# ponytail: the per-supplier kernel magnitudes below are calibration knobs --
+# grounded starting personalities (spot cheap/volatile, backup mid, qualified
+# premium/steady), swept later by the benchmark tuning workstream, not final.
 SUPPLIERS = {
-    "qualified": {"drifts": False, "otif": 99, "lead": 14, "onboard_weeks": 0,
+    "qualified": {"kernel": {"onset": 0.03, "wobble_to_degraded": 0.30,
+                             "wobble_to_reliable": 0.55, "degraded_persist": 0.50,
+                             "max_degraded": 2, "defunct_from_degraded": 0.0},
+                  "otif": 99, "lead": 14, "onboard_weeks": 0,
                   "econ": {"attr": "qualified_premium", "sign": 1,
                            "key": "unit_premium"}},
-    "spot":      {"drifts": True,  "otif": None, "lead": None, "onboard_weeks": 0,
+    "spot":      {"kernel": None, "otif": None, "lead": None, "onboard_weeks": 0,
                   "econ": {"attr": "spot_unit_discount", "sign": -1,
                            "key": "unit_discount"}},
-    "backup":    {"drifts": False, "otif": 95, "lead": 16, "onboard_weeks": 1,
+    "backup":    {"kernel": {"onset": 0.06, "wobble_to_degraded": 0.40,
+                             "wobble_to_reliable": 0.40, "degraded_persist": 0.60,
+                             "max_degraded": 3, "defunct_from_degraded": 0.03},
+                  "otif": 95, "lead": 16, "onboard_weeks": 1,
                   "econ": {"attr": "backup_unit_delta", "sign": 1, "key": None}},
 }

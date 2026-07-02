@@ -9,7 +9,8 @@ import random
 from . import products
 from .config import WorldConfig
 from .modules.disruption import HiddenState, analyst_briefing
-from .modules.supplier import (Contract, SUPPLIER_DISPLAY, SUPPLIERS,
+from .modules.supplier import (Contract, DRIVES as SUPPLIER_DRIVES,
+                               SUPPLIER_DISPLAY, SUPPLIERS,
                                SupplierState, TERM_MENU, contract_open,
                                supplier_audit, terms_for)
 from .substrate import Books, FreightLock, resolve_week
@@ -404,7 +405,8 @@ class World:
         # honest books signal (you ordered, this much actually shipped). Present
         # only when you sourced the drifting supplier on the legacy single-line
         # path, so it accrues as you buy from it (history-forced). Observed fact.
-        if self.cfg.sup_mask_otif and qty and supplier and SUPPLIERS[supplier]["drifts"]:
+        if (self.cfg.sup_mask_otif and qty and supplier
+                and supplier in SUPPLIER_DRIVES(self.cfg)):
             obs["realized_fill"] = self.suppliers[supplier].fulfilled_fraction
         info = {"hidden": self.hidden.to_dict()}  # for replay/oracle, never the agent
         self.trace.append({"week": self.week, "hidden": info["hidden"],

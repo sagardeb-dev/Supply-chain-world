@@ -12,13 +12,16 @@ from .text import SUPPLIER_BAND_DISPLAY, SUPPLIER_DISPLAY
 
 def _supplier_row(sid: str, sup: SupplierState, cfg: WorldConfig) -> dict:
     """One scorecard row, fully driven by the supplier's profile (SUPPLIERS)
-    -- no instance-name branch. A drifting supplier reads its OTIF/lead/band
-    from the visible band of its reliability chain (the deliberate 1-week
-    'slipping' ambiguity, A5); a frozen supplier shows the constants its
-    profile declares. NEVER reads the disruption state (observation
-    independence). Adding supplier #4 is one SUPPLIERS entry."""
+    -- no instance-name branch. A supplier that DRIFTS IN THIS WORLD (sid in
+    DRIVES(cfg): spot always, qualified/backup too under sup_all_drift) reads
+    its OTIF/lead/band from the visible band of its reliability chain (the
+    deliberate 1-week 'slipping' ambiguity, A5); a frozen supplier shows the
+    constants its profile declares. NEVER reads the disruption state
+    (observation independence). Adding supplier #4 is one SUPPLIERS entry."""
+    from . import DRIVES  # deferred: this module is imported BY the package init
     prof = SUPPLIERS[sid]
-    if prof["drifts"]:
+    drifting = sid in DRIVES(cfg)
+    if drifting:
         true_band = sup.regime  # ontime|slipping|failing|defunct (Lever 1)
         # masked task: the displayed band/OTIF/lead LAG the true band by ~one
         # severity step (a gameable contractual metric); default world shows the
@@ -33,7 +36,7 @@ def _supplier_row(sid: str, sup: SupplierState, cfg: WorldConfig) -> dict:
            "onboard_lead": prof["onboard_weeks"]}
     # masked task: surface the noisy realized-lead-slip sensor on the drifting
     # supplier's row (books channel #2). Observed state, not a regime readout.
-    if prof["drifts"] and cfg.sup_mask_otif:
+    if drifting and cfg.sup_mask_otif:
         row["realized_lead_slip"] = sup.lead_slip
     # unit economics, per supplier. The profile names the cfg field holding
     # the magnitude (cfg stays the single source of truth -- no number is
@@ -68,10 +71,12 @@ def supplier_audit(suppliers: dict, cfg: WorldConfig) -> str:
     OTIF scorecard hides. Resolves the present (epistemic); it says nothing about
     whether a wobble will recover or worsen -- that future is aleatoric. Mirrors
     disruption.analyst_briefing."""
+    from . import DRIVES  # deferred: imported BY the package init
     mode = cfg.semantics
+    drifting = DRIVES(cfg)
     parts = []
     for sid in SUPPLIERS:
-        if sid not in suppliers or not SUPPLIERS[sid]["drifts"]:
+        if sid not in suppliers or sid not in drifting:
             continue
         band = SUPPLIER_BAND_DISPLAY[mode].get(suppliers[sid].regime,
                                                suppliers[sid].regime)

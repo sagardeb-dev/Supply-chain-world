@@ -9,7 +9,7 @@ import random
 from dataclasses import dataclass, asdict
 
 from ...config import WorldConfig
-from .config import SUPPLIER_FILL_MEAN, SUPPLIER_LEAD_SLIP
+from .config import SUPPLIER_FILL_MEAN, SUPPLIER_LEAD_SLIP, SUPPLIERS
 
 SUPPLIER_STATES = ("reliable", "wobbling", "degraded", "defunct")
 
@@ -30,6 +30,10 @@ class SupplierState:
                             # sensor (days). 0 unless cfg.sup_mask_otif drew it.
     fill_draw: float | None = None  # masked task: this week's NOISY realized fill
                             # fraction. None => legacy deterministic lookup.
+    sid: str = "spot"  # which roster member this is -> whose kernel personality
+                       # step_supplier uses (Phase 2). Appended LAST (defaulted)
+                       # so the existing positional ctor calls stay valid, and a
+                       # bare SupplierState() keeps legacy (cfg-driven) behaviour.
 
     @property
     def regime(self) -> str:
@@ -69,15 +73,30 @@ def step_supplier(sup: SupplierState, rng: random.Random,
     independent (Becker Def. 2) and debuggable in isolation.
 
     Runs UNCONDITIONALLY every week (the supplier drifts whether or not you
-    source from it), which is what makes the scorecard a free side-channel."""
+    source from it), which is what makes the scorecard a free side-channel.
+
+    Phase 2: each supplier reads its OWN kernel personality from its profile
+    (SUPPLIERS[sup.sid]["kernel"]). spot's kernel is None -> fall back to the
+    global cfg.sup_* fields, EXACTLY as before, so the legacy world (only spot
+    drifting) stays byte-identical AND cfg stays the calibration surface. The
+    transition logic below reads only that resolved dict + rng (never another
+    module's state -> transition independence). rng draw order is unchanged."""
+    k = SUPPLIERS[sup.sid]["kernel"]
+    if k is None:
+        k = {"onset": cfg.sup_onset_prob,
+             "wobble_to_degraded": cfg.sup_wobble_to_degraded,
+             "wobble_to_reliable": cfg.sup_wobble_to_reliable,
+             "degraded_persist": cfg.sup_degraded_persist,
+             "max_degraded": cfg.sup_max_degraded,
+             "defunct_from_degraded": cfg.sup_defunct_from_degraded}
     s, age = sup.rel_state, sup.rel_age
     if s == "reliable":
-        nxt = "wobbling" if rng.random() < cfg.sup_onset_prob else "reliable"
+        nxt = "wobbling" if rng.random() < k["onset"] else "reliable"
     elif s == "wobbling":
         r = rng.random()
-        if r < cfg.sup_wobble_to_degraded:
+        if r < k["wobble_to_degraded"]:
             nxt = "degraded"
-        elif r < cfg.sup_wobble_to_degraded + cfg.sup_wobble_to_reliable:
+        elif r < k["wobble_to_degraded"] + k["wobble_to_reliable"]:
             nxt = "reliable"
         else:
             nxt = "wobbling"
@@ -87,11 +106,11 @@ def step_supplier(sup: SupplierState, rng: random.Random,
     else:  # degraded
         # First check the death hazard (degraded is the only entry to defunct);
         # then the recover-or-persist branch as before.
-        if rng.random() < cfg.sup_defunct_from_degraded:
+        if rng.random() < k["defunct_from_degraded"]:
             nxt = "defunct"
         else:
-            over = (age + 1 >= cfg.sup_max_degraded
-                    or rng.random() > cfg.sup_degraded_persist)
+            over = (age + 1 >= k["max_degraded"]
+                    or rng.random() > k["degraded_persist"])
             nxt = "reliable" if over else "degraded"
     # masked task ONLY: draw this week's noisy lead-slip sensor. Gated on the
     # flag so the default world draws no extra rng -> trajectory + golden tests
@@ -103,4 +122,4 @@ def step_supplier(sup: SupplierState, rng: random.Random,
         fill = round(min(1.0, max(0.0, rng.gauss(SUPPLIER_FILL_MEAN[nxt],
                                                  cfg.sup_fill_sd))), 2)
     return SupplierState(rel_state=nxt, rel_age=0 if nxt != s else age + 1,
-                         lead_slip=slip, fill_draw=fill)
+                         lead_slip=slip, fill_draw=fill, sid=sup.sid)

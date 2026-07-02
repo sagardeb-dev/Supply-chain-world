@@ -35,6 +35,12 @@ class WorldConfig:
     # 14.5% of disruptions are supplier failures -> a few % per week from
     # degraded gives a realistic 'distressed -> dead' tail. Absorbing.
     sup_defunct_from_degraded: float = 0.06
+    # Phase 2: when True, ALL THREE suppliers drift, each on its own hidden
+    # reliability chain with its own personality (kernel params live in the
+    # SUPPLIERS profile). Default False keeps the legacy world (only spot drifts;
+    # qualified/backup frozen constants) byte-identical. The v2 scored world
+    # (earbuds assembly) turns this ON so which supplier to source is a real bet.
+    sup_all_drift: bool = False
     # --- masked-distress task: the spot supplier's OTIF scorecard LAGS its true
     # reliability (a gameable contractual metric); the timely truth lives in two
     # noisy "books" channels (realized_fill + realized_lead_slip) and

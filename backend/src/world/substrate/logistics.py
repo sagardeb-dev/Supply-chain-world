@@ -17,7 +17,7 @@ stored (no finished-goods inventory).
 from ..config import WorldConfig
 from ..couplings import crisis_backorder
 from ..modules.disruption import HiddenState
-from ..modules.supplier import SUPPLIERS
+from ..modules.supplier import DRIVES, SUPPLIERS
 from ..products import structure
 from .books import Books, Shipment, _advance
 
@@ -97,10 +97,12 @@ def resolve_week(books: Books, orders, route: str | None, h: HiddenState,
             continue
         comp, sid = line["component"], line["supplier"]
         prof = SUPPLIERS[sid]
-        # a drifting supplier may leave the dock short (its noisy fulfilled
-        # fraction); a non-drifting one always ships full -- read the PROFILE,
-        # never a "spot" literal, so a second drifting supplier just works.
-        frac = suppliers[sid].fulfilled_fraction if prof["drifts"] else 1.0
+        # a supplier that DRIFTS IN THIS WORLD may leave the dock short (its
+        # noisy fulfilled fraction); a frozen one always ships full. WHO drifts
+        # is DRIVES(cfg) -- spot always, qualified/backup too under
+        # sup_all_drift -- never a "spot" literal, so all-drift just works.
+        frac = (suppliers[sid].fulfilled_fraction
+                if sid in DRIVES(cfg) else 1.0)
         shipped = round(qty * frac)
         shortfall_units += qty - shipped
         if shipped:

@@ -149,6 +149,95 @@ def flat_component_policy_cost(seed: int, cfg: WorldConfig, registry=None) -> fl
     return w.total_cost
 
 
+# --- Phase 2 gate probe: does the sourcing bet have teeth? -------------------
+# Two non-adaptive sourcing policies on the v2 scored world (earbuds + all three
+# suppliers drifting). Both reuse the per-component order-up-to-S sizing above;
+# they differ only in WHO they source from. Keep it simple -- a gate probe, not
+# a benchmark harness.
+
+def _teeth_cfg() -> WorldConfig:
+    """The v2 scored world the sourcing bet lives in: earbuds assembly + all
+    three suppliers drifting, masked like the agent's world (spot incumbent)."""
+    return WorldConfig(product="earbuds", sup_all_drift=True, sup_mask_otif=True)
+
+
+def _spot_band(obs) -> str:
+    """spot's current VISIBLE scorecard band (ontime/slipping/failing/defunct)
+    -- the reactive policy's only supplier signal (masked, so it lags)."""
+    return next(r for r in obs["suppliers"] if r["id"] == "spot")["band"]
+
+
+def _source_all_from(w, target: str, S: dict, prod, obs):
+    """Stage each component's order-up-to-S qty from `target` and step, signing a
+    fresh contract for target first if we don't already hold a live one. If the
+    target is un-sourceable (defunct -> its contract is open and it cannot be
+    re-signed), skip ordering this week (a do-nothing step) -- the starvation IS
+    the teeth. Mirrors drive_component_base_stock's staging + free-qty sizing.
+    Returns the step's obs (or the passed obs on a skipped week).
+    ponytail: never lapses the OLD contract after a switch, so dual-source
+    overhead (~4/wk) accrues for the rest of the run -- biases AGAINST the
+    switching policy, so a positive teeth result survives it; add a lapse
+    sub-action if the gate ever reads marginal."""
+    action = {"route": "suez"}
+    if target not in w._contracted_suppliers():
+        if w._alive().get(target):        # signable only if not defunct
+            action["contract"] = {"action": "sign", "supplier": target,
+                                  "terms": None}
+        else:
+            return w.step({"qty": 0})[0]   # dead target: cannot source it now
+    for cid in prod.component_ids:
+        pos = (w.books.components[cid]
+               + sum(s.qty for s in w.books.pipeline if s.component == cid))
+        qty = max(0, min(S[cid] - pos, w.cfg.order_max))
+        if qty:
+            w.stage_order(cid, qty, target)
+    return w.step(action)[0]
+
+
+def drive_greedy_cheap(seed: int, cfg: WorldConfig = None):
+    """Always source every component from the cheapest supplier (spot), same
+    per-component order-up-to sizing as drive_component_base_stock. The naive
+    cost-chaser: great while spot is healthy, exposed when it wobbles/dies."""
+    cfg = cfg or _teeth_cfg()
+    w = World(cfg, registry=CORE)
+    obs = w.reset(seed)
+    prod = structure(cfg.product)
+    S = _component_S(cfg, prod)
+    while not w.done:
+        obs = _source_all_from(w, "spot", S, prod, obs)
+    return w
+
+
+def drive_reactive_switch(seed: int, cfg: WorldConfig = None):
+    """Source spot while its scorecard band reads 'ontime'; the moment it reads
+    slipping/failing/defunct, source qualified instead (and switch back when spot
+    recovers to ontime). Same order-up-to sizing. The band-reactive hedger."""
+    cfg = cfg or _teeth_cfg()
+    w = World(cfg, registry=CORE)
+    obs = w.reset(seed)
+    prod = structure(cfg.product)
+    S = _component_S(cfg, prod)
+    while not w.done:
+        target = "spot" if _spot_band(obs) == "ontime" else "qualified"
+        obs = _source_all_from(w, target, S, prod, obs)
+    return w
+
+
+def sourcing_teeth(seeds: list) -> dict:
+    """Run both sourcing policies over the seeds; return mean total cost + mean
+    fill for each. The 'sourcing bet has teeth' gate: reactive_switch should buy
+    materially better fill (and/or cost) than blind greedy_cheap when suppliers
+    drift -- if the two are indistinguishable, the bet is toothless."""
+    from statistics import mean
+    out = {}
+    for name, driver in (("greedy_cheap", drive_greedy_cheap),
+                         ("reactive_switch", drive_reactive_switch)):
+        runs = [driver(s) for s in seeds]
+        out[name] = {"mean_cost": mean(w.total_cost for w in runs),
+                     "mean_fill": mean(w.fill_rate for w in runs)}
+    return out
+
+
 def main():
     cfg = WorldConfig(sup_mask_otif=True)   # match the scored CORE+masked world
     print(f"{'seed':>4} {'suez20':>8} {'cape20':>8} {'bstock':>8} "
@@ -160,6 +249,12 @@ def main():
         bstock = w.total_cost
         print(f"{seed:>4} {suez:>8.0f} {cape:>8.0f} {bstock:>8.0f} "
               f"{w.fill_rate:>8.2f} {min(suez, cape, bstock):>9.0f}")
+    # Phase 2 gate: the sourcing bet's teeth on the earbuds + all-drift world.
+    teeth = sourcing_teeth(list(range(1, 21)))
+    print("\nsourcing-teeth gate (earbuds + all-drift, seeds 1..20):")
+    for name, m in teeth.items():
+        print(f"  {name:>16}: mean_cost {m['mean_cost']:>9.0f}  "
+              f"mean_fill {m['mean_fill']:.3f}")
 
 
 if __name__ == "__main__":

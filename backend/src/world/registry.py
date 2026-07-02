@@ -54,8 +54,10 @@ def _init_disruption(cfg):
 
 
 def _init_supplier(cfg):
-    # the full roster (all suppliers); the kernel advances only drifting ids.
-    return {sid: supplier.SupplierState() for sid in supplier.SUPPLIERS}
+    # the full roster (all suppliers); the kernel advances only the drifting ids
+    # (DRIVES(cfg)). Each state carries its own sid so step_supplier knows whose
+    # personality kernel to use (Phase 2).
+    return {sid: supplier.SupplierState(sid=sid) for sid in supplier.SUPPLIERS}
 
 
 def _init_demand(cfg):

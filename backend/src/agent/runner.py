@@ -56,8 +56,13 @@ class AgentRun:
         # full six-factor stretch. product="earbuds" selects the assembly world.
         # The choice lives in the pickled World, so resume restores the same world.
         from src.world.registry import CORE
+        # the v2 scored world = earbuds assembly + all-drift suppliers (all three
+        # drift on their own personality, so which supplier to source per
+        # component is a real bet). Direct WorldConfig(product="earbuds") builds
+        # elsewhere (Phase-1 tests) keep the flag off and stay valid.
         self.world = World(WorldConfig(semantics=semantics, sup_mask_otif=masked,
-                                       product=product),
+                                       product=product,
+                                       sup_all_drift=(product == "earbuds")),
                            registry=CORE if registry is None else registry)
         self.world.reset(seed)
         self.recorder: list[dict] = []

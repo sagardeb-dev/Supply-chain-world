@@ -309,6 +309,21 @@ def build_system_prompt(world) -> str:
             "offered or a channel isn't in your weekly report, it does not "
             "apply this run.")
         assert base != _before, "cost_breakdown honesty-note anchor drifted"
+    if world.cfg.sup_all_drift:
+        # Phase 2: all three suppliers drift on their own hidden process, so the
+        # single-line characterisations above are now personalities, not
+        # guarantees. Gate strictly on the flag; do not restructure the section.
+        _b = base
+        base = base.replace(
+            "FIRST order can ship.",
+            "FIRST order can ship.\n- In THIS world EVERY supplier's reliability "
+            "drifts on its own hidden process -- not just spot -- so the notes "
+            "above are now characters, not guarantees: spot is cheap but "
+            "volatile, backup is middling, qualified is premium and the "
+            "steadiest of the three. Each supplier's scorecard row shows its own "
+            "current read, so sourcing each component is a live bet on whose "
+            "process is healthy right now.")
+        assert base != _b, "all-drift supplier-note anchor drifted"
     if not world.cfg.sup_mask_otif:
         return base
     p = base

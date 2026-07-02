@@ -1171,14 +1171,132 @@ def test_hard_gap_defunct_spot_leaves_you_stuck():
 
 
 def test_supplier_module_drives_only_drifting_roster_ids():
-    """The supplier module advances exactly the roster ids whose profile
-    sets drifts=True (only spot in R1), read from SUPPLIERS -- no literal
-    'spot' in the module record."""
+    """The supplier module's drives is a callable of cfg (Phase 2): legacy
+    (sup_all_drift off) advances only spot; the all-drift world advances all
+    three, spot FIRST (rng append discipline). No literal 'spot' branch in the
+    module record -- the engine resolves the callable in _advance_modules."""
     from src.world.registry import SUPPLIER
-    from src.world.modules.supplier import SUPPLIERS
-    assert SUPPLIER.drives == tuple(sid for sid, p in SUPPLIERS.items()
-                                    if p["drifts"])
-    assert SUPPLIER.drives == ("spot",)
+    assert callable(SUPPLIER.drives)
+    assert SUPPLIER.drives(WorldConfig()) == ("spot",)
+    assert SUPPLIER.drives(WorldConfig(sup_all_drift=True)) == (
+        "spot", "qualified", "backup")
+
+
+# --- Phase 2: all three suppliers drift, each with its own personality --------
+
+def test_personalities_distinct():
+    """With sup_all_drift ON, each supplier drifts on its OWN kernel: spot is the
+    cheap/volatile one, qualified premium/steady, backup mid. Count degraded+
+    defunct weeks per supplier over many seeds and assert the ordering with a
+    material gap (a personality check, not a calibration pin)."""
+    cfg = WorldConfig(sup_all_drift=True)
+    counts = {"spot": 0, "qualified": 0, "backup": 0}
+    for seed in range(40):
+        w = World(cfg)
+        w.reset(seed)
+        while not w.done:
+            w.step({"qty": 0})                       # kernel runs unconditionally
+            for sid in counts:
+                if w.suppliers[sid].rel_state in ("degraded", "defunct"):
+                    counts[sid] += 1
+    # spot is materially the most distressed; qualified the least; backup between
+    assert counts["spot"] >= 2 * counts["qualified"], counts
+    assert counts["qualified"] < counts["backup"] < counts["spot"], counts
+
+
+def test_all_drift_flag_gates_rng():
+    """The flag gates the drift, and spot draws FIRST (rng append discipline).
+
+    (a) Flag OFF (default): qualified/backup NEVER leave 'reliable' -- frozen,
+        and no extra rng is drawn (legacy byte-identity, pinned by the wider
+        suite's golden/trace tests).
+    (b) Spot draws FIRST: with the flag ON the drives order is
+        ('spot', 'qualified', 'backup') -- spot, NOT dict-order's 'qualified',
+        is advanced first -- so spot's WEEK-1 draw is not displaced by the
+        appended suppliers and its week-1 state matches the flag-OFF world.
+
+    CAVEAT (see report): because the engine advances every driver from the ONE
+    shared self.rng with no engine change (per the design mandate), the appended
+    qualified/backup draws DO shift the shared stream for LATER weeks, so spot's
+    FULL multi-week trajectory is not identical across the flag -- only its
+    week-1 prefix is. Full-trajectory identity would require a separate appended
+    rng stream (an engine change the brief forbids)."""
+    from src.world.registry import SUPPLIER
+    assert SUPPLIER.drives(WorldConfig(sup_all_drift=True))[0] == "spot"
+    for seed in range(10):
+        off = World(WorldConfig())
+        off.reset(seed)
+        on = World(WorldConfig(sup_all_drift=True))
+        on.reset(seed)
+        # (b) week-1: spot advances first, so its state is unchanged by the flag.
+        off.step({"qty": 0})
+        on.step({"qty": 0})
+        assert off.suppliers["spot"].rel_state == on.suppliers["spot"].rel_state
+        # (a) flag OFF freezes qualified/backup for the whole horizon.
+        assert off.suppliers["qualified"].rel_state == "reliable"
+        assert off.suppliers["backup"].rel_state == "reliable"
+        while not off.done:
+            off.step({"qty": 0})
+            assert off.suppliers["qualified"].rel_state == "reliable"
+            assert off.suppliers["backup"].rel_state == "reliable"
+
+
+def test_short_ship_starves_assembly():
+    """earbuds + all-drift: a PARTIAL dock-fill from a wobbling sourced supplier
+    (ships ~half) lands fewer components, and when that scarce component binds
+    the BOM the finished good is served < demand. Compared against a healthy
+    (full-ship) source over the same schedule: less arrives -> less is served
+    -> a real assembly shortfall."""
+    cfg = WorldConfig(product="earbuds", sup_all_drift=True)
+    prod = structure("earbuds")
+
+    def run(spot_state):
+        books = Books(components={cid: 0 for cid in prod.component_ids})
+        rost = {sid: SupplierState(sid=sid)
+                for sid in ("qualified", "spot", "backup")}
+        rost["spot"] = spot_state
+        rows = []                                    # (arrived, served, short) totals
+        for week in range(1, 9):
+            orders = ([{"component": cid, "qty": 40, "supplier": "spot"}
+                       for cid in prod.component_ids] if week == 1 else [])
+            a, s, sh, _ = resolve_week(books, orders, "suez", CALM, rost, week, cfg)
+            rows.append((sum(a.values()), sum(s.values()), sum(sh.values())))
+        return rows
+
+    healthy = run(SupplierState(sid="spot"))                       # ships full
+    wobbling = run(SupplierState(rel_state="wobbling", sid="spot"))  # ships ~half
+    arr_h = sum(a for a, _, _ in healthy)
+    arr_w = sum(a for a, _, _ in wobbling)
+    srv_h = sum(s for _, s, _ in healthy)
+    srv_w = sum(s for _, s, _ in wobbling)
+    short_w = sum(sh for _, _, sh in wobbling)
+    # the partial fill lands strictly fewer components than a full ship (>0)
+    assert 0 < arr_w < arr_h, (arr_w, arr_h)
+    # ...which starves assembly: fewer finished goods served, a real shortfall
+    assert srv_w < srv_h and short_w > 0, (srv_w, srv_h, short_w)
+
+
+def test_scorecard_reflects_all_three():
+    """Flag ON, the obs scorecard rows for qualified AND backup show NON-constant
+    bands over the horizon on seeds where they drift -- proof the scorecard now
+    reflects all three suppliers' hidden chains, not just spot's."""
+    cfg = WorldConfig(sup_all_drift=True)
+
+    def multi_band(sid):
+        for seed in range(20):
+            w = World(cfg)
+            w.reset(seed)
+            seen = set()
+            while not w.done:
+                obs = w.step({"qty": 0})[0]
+                seen.add(next(r for r in obs["suppliers"]
+                              if r["id"] == sid)["band"])
+            if len(seen) > 1:
+                return True
+        return False
+
+    assert multi_band("qualified"), "qualified's scorecard band must vary"
+    assert multi_band("backup"), "backup's scorecard band must vary"
 
 
 def test_disruption_emit_byte_identical_to_handbuilt_obs():
