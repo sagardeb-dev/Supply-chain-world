@@ -44,7 +44,8 @@ class AgentRun:
     JSONL log on disk so a run can be inspected after the fact."""
 
     def __init__(self, run_id: str, seed: int, model_slug: str, mode: str,
-                 semantics: str = "real", registry=None, masked: bool = True):
+                 semantics: str = "real", registry=None, masked: bool = True,
+                 product: str = "single"):
         self.run_id = run_id
         self.seed = seed
         self.model_slug = model_slug
@@ -52,10 +53,11 @@ class AgentRun:
         self.semantics = semantics
         # registry=None -> the scored 3-factor CORE world (disruption + supplier
         # + demand, with the masked supplier task on); pass registry=RICH for the
-        # full six-factor stretch. The choice lives in the pickled World, so
-        # resume restores the same world.
+        # full six-factor stretch. product="earbuds" selects the assembly world.
+        # The choice lives in the pickled World, so resume restores the same world.
         from src.world.registry import CORE
-        self.world = World(WorldConfig(semantics=semantics, sup_mask_otif=masked),
+        self.world = World(WorldConfig(semantics=semantics, sup_mask_otif=masked,
+                                       product=product),
                            registry=CORE if registry is None else registry)
         self.world.reset(seed)
         self.recorder: list[dict] = []

@@ -48,15 +48,25 @@ def svc_inspect(world) -> dict:
     return world.inspect_batch()
 
 
+def svc_order_component(world, component: str, qty: int, supplier: str) -> dict:
+    """Stage one component order line for this week's dispatch (assembly world).
+    A within-week action (does not advance). Mirrors svc_inspect; the engine
+    validates the component/qty/supplier/contract."""
+    if world.done:
+        raise RuntimeError("episode is done")
+    return world.stage_order(component, qty, supplier)
+
+
 def svc_step(world, qty: int, route: str | None,
              supplier: str | None = None, contract: dict | None = None) -> dict:
     """Commit this week's order (and optional contract sub-action) and advance
-    one week. `route`/`supplier` are canonical or None. The engine is the
-    single validator (no fallback) -- we do NOT re-check here. The hidden-state
-    `info` is dropped and never returned."""
+    one week. `route`/`supplier` are canonical or None. `route` is passed through
+    even when qty is 0 so a week that dispatches only STAGED component orders
+    (assembly world) still has its shared lane. The engine is the single
+    validator (no fallback); the hidden-state `info` is dropped."""
     if world.done:
         raise RuntimeError("episode is done")
-    action = {"qty": qty, "route": route if qty else None,
+    action = {"qty": qty, "route": route,
               "supplier": supplier if qty else None}
     if contract:
         action["contract"] = contract

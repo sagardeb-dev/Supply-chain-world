@@ -9,6 +9,8 @@ weekly signals."""
 
 import re
 
+from src.world.products import structure
+
 SYSTEM_PROMPT = """\
 You run the import replenishment desk for a European importer on the \
 Asia-Europe shipping lane. You will run it for 26 weeks. Your one objective \
@@ -221,6 +223,41 @@ anything. Do NOT stop early. Every week's reasoning goes in the place_order \
 """
 
 
+def _assembly_framing(world, base: str) -> str:
+    """ADD a component/assembly framing for a multi-component (BOM) world, gated
+    so a single-component world is byte-identical to SYSTEM_PROMPT (mirrors the
+    module-presence strips). Numbers come from the product structure, none
+    hardcoded. For an assembly world, order_component stages each part and
+    place_order's qty is unused (the staged lines ship on its route)."""
+    prod = structure(world.cfg.product)
+    if len(prod.component_ids) <= 1:
+        return base  # single-component world: prompt unchanged
+    bom = "; ".join(
+        f"{fg} = " + " + ".join(f"{q}x {c}" for c, q in prod.bom[fg].items())
+        for fg in prod.finished_goods)
+    section = (
+        "\n\nASSEMBLY (this is a components/BOM world -- read this)\n"
+        f"You do NOT buy finished goods. You import COMPONENTS by sea, hold them "
+        f"per component, and ASSEMBLE finished models to order each week. Bill of "
+        f"materials: {bom}. A shared component starves every model that needs it. "
+        "Assemble-to-order: components are the only buffer -- each week you build "
+        "each model up to the min over its BOM of (that component on hand / its "
+        "BOM qty), bounded by that model's demand; there is no finished-goods "
+        "stock.\n"
+        "- order_component(component, qty, supplier): stage a purchase of one "
+        "component this week. Call it once per component you want to buy; a "
+        "within-week action that does NOT advance. Then call place_order once to "
+        "dispatch every staged line on its route and advance the week -- in an "
+        "assembly world place_order's qty is unused (pass 0); route/supplier/"
+        "contract still apply.\n"
+        "- WHAT YOU SEE: `components` maps each component to its on_hand, "
+        "on_order, and inventory_position; `served` is the units of each model "
+        "you assembled and shipped this week; `demand` is each model's noisy POS "
+        "and forecast. Size each component's inventory_position to its own demand "
+        "(summed across the models that use it) over its own lead.")
+    return base + section
+
+
 def build_system_prompt(world) -> str:
     """The system prompt for this world. Default worlds get SYSTEM_PROMPT
     verbatim; the masked-distress task (cfg.sup_mask_otif) adds the buy_audit
@@ -232,6 +269,7 @@ def build_system_prompt(world) -> str:
     drifts; the trailing assert catches any anchor that stops matching."""
     present = {m.id for m in world.registry}
     base = SYSTEM_PROMPT
+    base = _assembly_framing(world, base)
     if "freight" not in present:
         # lock_freight is gated out of make_tools without the freight module --
         # strip its lever bullet so the prompt never offers a tool the agent

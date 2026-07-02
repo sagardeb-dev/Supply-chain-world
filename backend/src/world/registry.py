@@ -25,6 +25,7 @@ modules/<name>/ package + its record + one REGISTRY entry here.
 from dataclasses import dataclass
 from typing import Callable
 
+from . import products
 from .modules import demand, disruption, freight, port, quality, supplier
 
 
@@ -36,7 +37,9 @@ class Module:
     kernel: Callable | None       # step(state, rng, cfg) -> state ; None if no hidden state
     emit: Callable                # observe(...) -> {obs_key: value}  -- FLAT, byte-identical to today
     view: Callable                # (cfg) -> {obs_key: {"role", "label"}}  -- presentation manifest
-    drives: tuple[str, ...]       # roster instance ids it advances
+    drives: tuple[str, ...] | Callable  # roster ids it advances, or (cfg) -> ids
+                                  # for product-dependent rosters (demand runs
+                                  # one chain per finished good)
     init: Callable | None = None  # (cfg) -> initial state (singleton) | {id: state} (roster).
                                   # None falls back to state_cls(). The module owns its own
                                   # reset, so the engine stays factor-agnostic.
@@ -56,7 +59,11 @@ def _init_supplier(cfg):
 
 
 def _init_demand(cfg):
-    return demand.DemandState()
+    # a per-finished-good roster: one DemandState per model. `single` -> one
+    # stream ("unit"), so its rng draw order is byte-identical to the old
+    # singleton; earbuds -> one stream per model.
+    return {fg: demand.DemandState()
+            for fg in products.structure(cfg.product).finished_goods}
 
 
 def _init_freight(cfg):

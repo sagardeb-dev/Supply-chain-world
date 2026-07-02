@@ -28,7 +28,7 @@ STATUS_MARK = {"at_sea": "", "queued_at_suez": "Q", "diverted_via_cape": "D"}
 
 # --- running -------------------------------------------------------------
 
-def run_agent(seed, model, mode, semantics, rich):
+def run_agent(seed, model, mode, semantics, rich, product="single"):
     """Stream the agent through the episode, printing it as a chat as it goes:
     the agent's reasoning, the order it places, then the world's reply with the
     hidden tape annotated. Returns (world, the printed chat as one string)."""
@@ -40,7 +40,7 @@ def run_agent(seed, model, mode, semantics, rich):
     from .prompt import build_system_prompt
 
     run = AgentRun(uuid4().hex, seed, model, mode, semantics,
-                   registry=RICH if rich else CORE)
+                   registry=RICH if rich else CORE, product=product)
     agent = build_agent(model, mode, make_tools(run), MemorySaver(),
                         build_system_prompt(run.world))
     config = {"configurable": {"thread_id": run.run_id}, "recursion_limit": 200}
@@ -93,6 +93,8 @@ def run_agent(seed, model, mode, semantics, rich):
                     emit("  AIR: " + str(m.content))
                 elif isinstance(m, ToolMessage) and m.name == "inspect_batch":
                     emit("  QC: " + str(m.content))
+                elif isinstance(m, ToolMessage) and m.name == "order_component":
+                    emit("  STAGE: " + str(m.content))
     return run.world, "\n".join(log)
 
 
@@ -311,9 +313,13 @@ def main():
     ap.add_argument("--mode", choices=["autonomous", "step_gated"],
                     default="autonomous")
     ap.add_argument("--semantics", choices=["real", "anon"], default="real")
+    ap.add_argument("--product", choices=["single", "earbuds"], default="single",
+                    help="product structure: earbuds = the assembly/BOM world")
     args = ap.parse_args()
     if not args.policy and not args.model:
         ap.error("--model is required (no default) unless you pass --policy")
+    if args.policy and args.product != "single":
+        ap.error("--policy drivers are single-product; use --model on earbuds")
 
     if args.policy:
         world = run_policy(args.seed, args.policy, args.semantics, args.rich)
@@ -322,11 +328,12 @@ def main():
         print_supplier_summary(world)
     else:
         world, chat = run_agent(args.seed, args.model, args.mode,
-                                args.semantics, args.rich)
+                                args.semantics, args.rich, args.product)
         print_summary(world)
         print_supplier_summary(world)
         # persist: the user hit "where's the trace?" twice -- stdout isn't enough
-        out = Path("runs") / f"seed{args.seed}-{args.model.replace('/', '-')}.chat.txt"
+        tag = "" if args.product == "single" else f"-{args.product}"
+        out = Path("runs") / f"seed{args.seed}{tag}-{args.model.replace('/', '-')}.chat.txt"
         out.parent.mkdir(exist_ok=True)
         out.write_text(chat + "\n")
         print(f"\nsaved {out}")

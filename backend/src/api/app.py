@@ -86,11 +86,18 @@ class ContractAction(BaseModel):
     terms: str | None = None  # negotiation menu key: short|long|strict|lenient
 
 
+class OrderLine(BaseModel):
+    component: str           # component id (assembly world; canonical, no anon)
+    qty: int = Field(ge=0)   # engine enforces the order_max cap
+    supplier: str            # qualified|spot|backup (or anon source_*)
+
+
 class ActionRequest(BaseModel):
     qty: int = Field(ge=0)   # free non-negative qty; engine enforces the order_max cap
     route: str | None = None  # vocabulary depends on episode semantics
     supplier: str | None = None  # qualified|spot|backup (or anon source_*)
     contract: ContractAction | None = None  # sign/switch/renew/lapse a contract
+    orders: list[OrderLine] | None = None  # staged component lines (assembly world)
 
 
 class StepResponse(BaseModel):
@@ -151,12 +158,27 @@ def step_episode(episode_id: str, action: ActionRequest) -> StepResponse:
     world = _get(episode_id)
     if world.done:
         raise HTTPException(status.HTTP_409_CONFLICT, "episode is done")
+    # assembly world: stage the component order lines BEFORE stepping (mirrors the
+    # order_component within-week tool). The step then dispatches them on `route`.
+    if action.orders:
+        for line in action.orders:
+            lsup = SUPPLIER_PARSE[world.cfg.semantics].get(line.supplier or "")
+            if lsup is None:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                    f"unknown supplier {line.supplier!r} for this episode")
+            try:
+                world.stage_order(line.component, line.qty, lsup)
+            except (ValueError, RuntimeError) as e:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
     route = supplier = None
-    if action.qty:
+    # a route is needed whenever anything ships this week: a bare qty order OR
+    # staged component lines.
+    if action.qty or action.orders:
         route = ROUTE_PARSE[world.cfg.semantics].get(action.route or "")
         if route is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                                 f"unknown route {action.route!r} for this episode")
+    if action.qty:
         supplier = SUPPLIER_PARSE[world.cfg.semantics].get(action.supplier or "")
         if supplier is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,

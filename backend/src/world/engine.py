@@ -6,6 +6,7 @@ only in _build_obs (R4)."""
 
 import random
 
+from . import products
 from .config import WorldConfig
 from .modules.disruption import HiddenState, analyst_briefing
 from .modules.supplier import (Contract, SUPPLIER_DISPLAY, SUPPLIERS,
@@ -62,7 +63,16 @@ class World:
             m.id: (m.init(self.cfg) if m.init
                    else m.state_cls() if m.state_cls else None)
             for m in self.registry}
-        self.books = Books(inventory=self.cfg.initial_inventory)
+        # per-component initial stock. `single` seeds its sole component from
+        # cfg.initial_inventory (legacy physics preserved byte-for-byte); a real
+        # assembly product (earbuds) seeds each component from its own initial.
+        prod = products.structure(self.cfg.product)
+        if self.cfg.product == "single":
+            components = {prod.component_ids[0]: self.cfg.initial_inventory}
+        else:
+            components = {cid: comp.initial
+                          for cid, comp in prod.components.items()}
+        self.books = Books(components=components)
         # pre-contracted to the incumbent (evergreen anchor): you don't start a
         # supply chain with no supplier. Masked task: the incumbent is SPOT --
         # the supplier whose silent decline the agent must detect from the books
@@ -158,6 +168,31 @@ class World:
         self.books.inspected = True
         return {"fee": self.cfg.inspect_fee, "catch_rate": self.cfg.inspect_catch_rate}
 
+    def stage_order(self, component: str, qty: int, supplier: str) -> dict:
+        """Stage one component order line for THIS week's dispatch (assembly
+        world). A within-week action (does NOT advance, like inspect_batch): the
+        staged lines all ship together when place_order/step advances, on the
+        step's shared route. Validates the component, the qty bound, and that the
+        supplier is known. The CONTRACT mask is deliberately NOT checked here:
+        step applies the week's contract sub-action before validating lines, so
+        you can stage from a supplier and sign it in the same week's place_order
+        (the legacy sign+source-in-one-step affordance). An unsigned staged
+        supplier fails step's validation, which preserves the staged lines."""
+        if self.done:
+            raise RuntimeError("episode is done; call reset()")
+        prod = products.structure(self.cfg.product)
+        if component not in prod.component_ids:
+            raise ValueError(f"unknown component {component!r}; "
+                             f"choose from {list(prod.component_ids)}")
+        if not (0 <= qty <= self.cfg.order_max):
+            raise ValueError(f"qty must be in 0..{self.cfg.order_max}, got {qty}")
+        if supplier not in self.suppliers:
+            raise ValueError(f"unknown supplier {supplier!r}")
+        self.books.staged_orders.append(
+            {"component": component, "qty": qty, "supplier": supplier})
+        return {"component": component, "qty": qty, "supplier": supplier,
+                "staged": len(self.books.staged_orders)}
+
     def _new_contract(self, supplier: str, start: int, terms: str | None = None):
         """Mint a contract from a negotiation-menu selection (R5). Defaults to
         the 'strict'-length mid profile when no terms are chosen; qualified is
@@ -226,7 +261,11 @@ class World:
         for m in self.registry:
             if m.kernel is None:
                 continue
-            for sid in m.drives:
+            # drives may be a static tuple or a callable (cfg)->tuple (the demand
+            # roster's ids depend on the product). Resolving it here keeps the
+            # rng draw order = registry order (exogeneity) for any product.
+            drives = m.drives(self.cfg) if callable(m.drives) else m.drives
+            for sid in drives:
                 if sid == "":  # a singleton module-state
                     self.module_states[m.id] = m.kernel(
                         self.module_states[m.id], self.rng, self.cfg)
@@ -235,10 +274,16 @@ class World:
                         self.module_states[m.id][sid], self.rng, self.cfg)
 
     def step(self, action: dict):
-        """action = {"qty": 0|20|40, "supplier": "qualified"|"spot",
-        "route": "suez"|"cape"} - supplier AND route required iff qty > 0
-        (no fallback). Canonical names; the API layer translates anon
-        vocabularies (R4)."""
+        """action carries this week's order lines and advances one week. Two
+        paths, both valid:
+          - LEGACY (single-component): {"qty", "route", "supplier"} -- supplier
+            AND route required iff qty > 0 (no fallback). Mapped to one order
+            line for the sole component (back-compat with report_oracle / the API
+            / every scalar test).
+          - STAGED (assembly): component lines placed via stage_order this week
+            (consumed from books.staged_orders), dispatched together on the
+            shared action["route"]; action["qty"] is then unused.
+        Canonical names; the API layer translates anon vocabularies (R4)."""
         if self.done:
             raise RuntimeError("episode is done; call reset()")
         # contract sub-action (sign/switch/renew/lapse) resolves first, so a
@@ -246,22 +291,50 @@ class World:
         if action.get("contract"):
             self._apply_contract_action(action["contract"])
 
-        qty = action["qty"]
-        if not (0 <= qty <= self.cfg.order_max):
-            raise ValueError(f"qty must be in 0..{self.cfg.order_max}, got {qty}")
+        prod = products.structure(self.cfg.product)
+        # this week's order lines: the staged component orders, else -- back-compat
+        # -- one legacy line for the sole component synthesized from a bare
+        # {qty, supplier}. Staged orders are cleared only AFTER validation passes:
+        # a failed step (bad route, missing contract) must leave them staged so
+        # the agent's corrected retry still dispatches them.
+        staged = self.books.staged_orders
+        qty = action.get("qty", 0)
         route = action.get("route")
-        if qty and route not in ("suez", "cape"):
-            raise ValueError(f"qty {qty} needs route suez or cape, got {route!r}")
         supplier = action.get("supplier")
-        if qty and supplier not in self.suppliers:
+        if staged and qty:
             raise ValueError(
-                f"qty {qty} needs a known supplier, got {supplier!r}")
-        # per-contract mask: you may only source from a supplier you hold a
-        # live contract with (no fallback).
-        if qty and supplier not in self._contracted_suppliers():
-            raise ValueError(
-                f"no live contract with {supplier!r}; sign one first "
-                f"(contracted: {sorted(self._contracted_suppliers())})")
+                "component orders are staged; pass qty=0 (a bare qty would be "
+                "silently ignored)")
+        if staged:
+            orders = staged
+        elif qty:
+            orders = [{"component": prod.component_ids[0],
+                       "qty": qty, "supplier": supplier}]
+        else:
+            orders = []
+        # validate every line (known component, qty bound, known + contracted
+        # supplier). No fallback: a bad line raises, exactly like the old path.
+        for line in orders:
+            q = line["qty"]
+            if not (0 <= q <= self.cfg.order_max):
+                raise ValueError(f"qty must be in 0..{self.cfg.order_max}, got {q}")
+            if line["component"] not in prod.component_ids:
+                raise ValueError(f"unknown component {line['component']!r}")
+            if q and line["supplier"] not in self.suppliers:
+                raise ValueError(
+                    f"qty {q} needs a known supplier, got {line['supplier']!r}")
+            # per-contract mask: you may only source from a supplier you hold a
+            # live contract with (no fallback).
+            if q and line["supplier"] not in self._contracted_suppliers():
+                raise ValueError(
+                    f"no live contract with {line['supplier']!r}; sign one first "
+                    f"(contracted: {sorted(self._contracted_suppliers())})")
+        # a shipping line needs the week's shared route.
+        if any(l["qty"] for l in orders) and route not in ("suez", "cape"):
+            raise ValueError(f"a shipping order needs route suez or cape, "
+                             f"got {route!r}")
+        # validation passed: NOW consume the staged lines (like air_inbound).
+        self.books.staged_orders = []
 
         briefed = self._briefing is not None
         self._briefing = None
@@ -273,10 +346,15 @@ class World:
         # air-expedite (port lever): units flown in at the last decision land NOW,
         # bypassing the blocked port -- added BEFORE resolve_week serves demand so
         # they cover this week's shortfall. Billed below with the other levers.
+        # Single-component RICH worlds only (Phase 1): stocks into the sole component.
         air = self.books.air_inbound
         self.books.air_inbound = 0
         if air:
-            self.books.inventory += air
+            # Phase-1 assumption, loud on purpose: flying in "units" only means
+            # something when there is exactly one component to fly.
+            assert len(prod.component_ids) == 1, \
+                "expedite_air assumes a single-component product (Phase 1)"
+            self.books.components[prod.component_ids[0]] += air
         # a live freight lock OVERRIDES this week's realized rate (you pay the
         # locked rate, up or down), then its window decrements -- per week, even
         # if you do not ship (an unused lock still burns).
@@ -291,21 +369,17 @@ class World:
         self.books.inspected = False
         if inspected and "defect_fraction" in eff:
             eff["defect_fraction"] *= (1.0 - self.cfg.inspect_catch_rate)
-        arrived, costs = resolve_week(
-            self.books, qty, supplier if qty else None,
-            route if qty else None, self.hidden,
-            self.suppliers[supplier] if qty else None,
+        arrived, served, shortfall, costs = resolve_week(
+            self.books, orders, route, self.hidden, self.suppliers,
             self.week, self.cfg, effects=eff)
         if lock:
             lock.weeks_left -= 1
             if lock.weeks_left <= 0:
                 self.books.freight_lock = None
-        # fill rate (lost-sales): demand is eff["demand"] in a demand world,
-        # else the constant; unmet units = stockout cost / unit stockout cost.
-        dem = eff.get("demand", self.cfg.weekly_demand)
-        shortfall = round(costs.get("stockout", 0.0) / self.cfg.stockout_cost)
-        self.demand_total += dem
-        self.served_total += dem - shortfall
+        # fill rate (lost-sales): the explicit per-finished-good served/shortfall
+        # returns (demand = served + shortfall per model). No back-derivation.
+        self.served_total += sum(served.values())
+        self.demand_total += sum(served.values()) + sum(shortfall.values())
         if briefed:
             costs["briefing"] = self.cfg.briefing_cost
         if audited:
@@ -325,18 +399,19 @@ class World:
         self.total_cost += cost
         self.done = self.week >= self.cfg.horizon_weeks
 
-        obs = self._build_obs(arrived=arrived, costs=costs)
+        obs = self._build_obs(arrived=arrived, costs=costs, served=served)
         # masked task: the realized fill on THIS week's spot order -- a real,
         # honest books signal (you ordered, this much actually shipped). Present
-        # only when you sourced the drifting supplier, so it accrues as you buy
-        # from it (history-forced). Observed fact, not a hidden readout.
-        if self.cfg.sup_mask_otif and qty and SUPPLIERS[supplier]["drifts"]:
+        # only when you sourced the drifting supplier on the legacy single-line
+        # path, so it accrues as you buy from it (history-forced). Observed fact.
+        if self.cfg.sup_mask_otif and qty and supplier and SUPPLIERS[supplier]["drifts"]:
             obs["realized_fill"] = self.suppliers[supplier].fulfilled_fraction
         info = {"hidden": self.hidden.to_dict()}  # for replay/oracle, never the agent
         self.trace.append({"week": self.week, "hidden": info["hidden"],
                            "hidden_states": self._hidden_full(),
-                           "action": {"qty": qty, "route": route if qty else None,
+                           "action": {"qty": qty, "route": route if (qty or staged) else None,
                                       "supplier": supplier if qty else None,
+                                      "orders": staged or None,
                                       "contract": action.get("contract"),
                                       "briefing": briefed, "audited": audited,
                                       "freight_locked": bool(lock),
@@ -344,18 +419,41 @@ class World:
                            "obs": obs, "cost": cost})
         return obs, cost, self.done, info
 
-    def _build_obs(self, arrived: int, costs: dict) -> dict:
+    def _build_obs(self, arrived, costs: dict, served=None) -> dict:
         # the latent factors emit their own slices (counts+bulletin, scorecard)
         # by iterating REGISTRY -- no hand-listed observe_* call. The engine
         # only owns the logistics/contract keys below.
+        prod = products.structure(self.cfg.product)
+        comps = self.books.components
+        pipe = self.books.pipeline
+
+        def _on_order(cid):
+            return sum(s.qty for s in pipe if s.component == cid)
+
+        on_hand = sum(comps.values())
+        on_order = sum(s.qty for s in pipe)
         obs = {
             "week": self.week,
-            "inventory": self.books.inventory,
-            "on_order": sum(s.qty for s in self.books.pipeline),
-            "inventory_position": (self.books.inventory
-                                   + sum(s.qty for s in self.books.pipeline)),
-            "arrived": arrived,
-            "pipeline": [self._display_shipment(s) for s in self.books.pipeline],
+            # back-compat scalar keys: for a single-component product these equal
+            # the legacy values byte-for-byte (inventory = sum of components).
+            "inventory": on_hand,
+            "on_order": on_order,
+            "inventory_position": on_hand + on_order,
+            # `arrived` from resolve_week is a per-component dict; the scalar total
+            # stays the observed key (legacy readers), the per-component detail
+            # lives in `components` below.
+            "arrived": sum(arrived.values()) if isinstance(arrived, dict) else arrived,
+            # per-component bins (assembly world): on-hand, in-flight, position,
+            # and this week's usable arrivals (WHICH part landed, not just how many).
+            "components": {cid: {"on_hand": comps[cid], "on_order": _on_order(cid),
+                                 "inventory_position": comps[cid] + _on_order(cid),
+                                 "arrived": (arrived.get(cid, 0)
+                                             if isinstance(arrived, dict) else 0)}
+                           for cid in prod.component_ids},
+            # per-finished-good units built and served this week (assemble-to-order).
+            "served": dict(served) if served is not None
+                      else {fg: 0 for fg in prod.finished_goods},
+            "pipeline": [self._display_shipment(s) for s in pipe],
             "cost_breakdown": dict(costs),
             "contracts": [self._display_contract(c) for c in self.books.contracts],
             "contract_open": self._open_supplier_ids(),  # the auto-renewal prompt

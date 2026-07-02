@@ -158,6 +158,10 @@ class WorldConfig:
     order_max: int = 100  # free order-qty cap; ~5 weeks of mean demand, generous
                           # enough not to bind a sane base-stock. Calibration knob.
     initial_inventory: int = 80
+    # product structure (assembly world): selects the bill of materials in
+    # products.py. "single" = degenerate one-component 1:1 (legacy physics);
+    # "earbuds" = the scored v2 assembly line (2 models, 3 shared/specific parts).
+    product: str = "single"
     suez_unit_cost: float = 4.0
     cape_unit_cost: float = 6.0           # ~1.5x Suez operating cost
     holding_cost: float = 1.0             # per unit per week, on-hand AND in-transit

@@ -7,6 +7,7 @@ from statistics import NormalDist
 
 from src.world.config import WorldConfig
 from src.world.engine import World
+from src.world.products import structure
 from src.world.registry import CORE
 
 
@@ -64,6 +65,88 @@ def drive_base_stock(seed: int, cfg: WorldConfig, registry=None):
 
 def base_stock_cost(seed: int, cfg: WorldConfig, registry=None) -> float:
     return drive_base_stock(seed, cfg, registry).total_cost
+
+
+# --- assembly (multi-component) baselines ------------------------------------
+
+def _component_demand_mean(cfg: WorldConfig, prod) -> dict:
+    """Mean weekly demand for each component = sum over the finished goods that
+    use it of (that model's mean demand x its BOM qty). Phase 1: per-FG demand
+    params are shared (cfg.weekly_demand), so each model contributes the same
+    mean through the BOM."""
+    return {cid: sum(cfg.weekly_demand * prod.bom[fg][cid]
+                     for fg in prod.finished_goods if cid in prod.bom[fg])
+            for cid in prod.component_ids}
+
+
+def _component_S(cfg: WorldConfig, prod) -> dict:
+    """Per-component order-up-to level from the newsvendor critical ratio. Each
+    component covers its own demand mean over its own lead (Suez transit + one
+    review week + the component's production lead_extra) plus a safety buffer
+    z*sigma*sqrt(L); sigma combines the independent per-model demand noise
+    feeding that component through the BOM. NOT hardcoded -- read off cfg/products."""
+    p, h = cfg.stockout_cost, cfg.holding_cost
+    z = NormalDist().inv_cdf(p / (p + h))
+    mu = _component_demand_mean(cfg, prod)
+    out = {}
+    for cid in prod.component_ids:
+        lead = cfg.suez_total_weeks + 1 + prod.components[cid].lead_extra
+        var = sum((cfg.demand_noise_sd * prod.bom[fg][cid]) ** 2
+                  for fg in prod.finished_goods if cid in prod.bom[fg])
+        out[cid] = round(mu[cid] * lead + z * (var ** 0.5) * (lead ** 0.5))
+    return out
+
+
+def _fill_by_fg(world) -> dict:
+    """Per-finished-good fill rate over the run: sum of served / sum of demand
+    (served + shortfall) per model, read off the trace's explicit served map."""
+    prod = structure(world.cfg.product)
+    served = {fg: 0 for fg in prod.finished_goods}
+    demand = {fg: 0 for fg in prod.finished_goods}
+    for rec in world.trace[1:]:                       # skip week 0 (no step yet)
+        s = rec["obs"].get("served", {})
+        d = rec["obs"].get("demand")                  # per-model emission (earbuds)
+        for fg in prod.finished_goods:
+            served[fg] += s.get(fg, 0)
+            demand[fg] += (d[fg]["pos_units"] if d else world.cfg.weekly_demand)
+    return {fg: (1.0 if demand[fg] == 0 else served[fg] / demand[fg])
+            for fg in prod.finished_goods}
+
+
+def drive_component_base_stock(seed: int, cfg: WorldConfig, registry=None):
+    """Per-component order-up-to-S base-stock for an assembly world: each week,
+    stage one order per component to lift its inventory position to S_c, then
+    place_order on Suez/qualified with a FREE quantity. The competent
+    material-requirements planner's non-adaptive policy; S_c from the critical
+    ratio, not a hardcoded constant. Returns the driven World."""
+    w = World(cfg, registry=CORE if registry is None else registry)
+    w.reset(seed)
+    prod = structure(cfg.product)
+    S = _component_S(cfg, prod)
+    while not w.done:
+        for cid in prod.component_ids:
+            pos = (w.books.components[cid]
+                   + sum(s.qty for s in w.books.pipeline if s.component == cid))
+            qty = max(0, min(S[cid] - pos, cfg.order_max))
+            if qty:
+                w.stage_order(cid, qty, "qualified")
+        w.step({"route": "suez"})
+    return w
+
+
+def flat_component_policy_cost(seed: int, cfg: WorldConfig, registry=None) -> float:
+    """The foil baseline: order EACH component at its mean every week (no
+    position feedback), Suez/qualified. A demand-blind flat ladder the adaptive
+    base-stock should beat on cost under noisy demand + lead times."""
+    w = World(cfg, registry=CORE if registry is None else registry)
+    w.reset(seed)
+    prod = structure(cfg.product)
+    mu = _component_demand_mean(cfg, prod)
+    while not w.done:
+        for cid in prod.component_ids:
+            w.stage_order(cid, round(mu[cid]), "qualified")
+        w.step({"route": "suez"})
+    return w.total_cost
 
 
 def main():

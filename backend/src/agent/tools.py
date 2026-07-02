@@ -1,7 +1,9 @@
 """The agent's two tools: buy_briefing (paid intel) and place_order (act +
 advance). Built per-run via make_tools(run); each drives run.world through the
 svc_* service layer and records a structured event. Tools return readable text
-for the model. No fallback logic: bad input raises, surfaced upstream. The
+for the model. No fallback logic in the ENGINE: bad input raises; the two order
+tools convert that to a REJECTED message (the model corrects and retries --
+a wrong call must never kill the episode), other tools surface it upstream. The
 week-0 obs is delivered in the kickoff message (runner.kickoff_message), not a
 tool -- a stateful agent already holds every later obs from place_order."""
 
@@ -10,8 +12,9 @@ import json
 from langchain_core.tools import tool
 
 from src.world.engine import HIDDEN_KEYS
+from src.world.products import structure
 from .service import (svc_audit, svc_briefing, svc_expedite, svc_inspect,
-                      svc_lock, svc_step)
+                      svc_lock, svc_order_component, svc_step)
 
 
 def make_tools(run):
@@ -88,6 +91,26 @@ def make_tools(run):
                 f"they stock.")
 
     @tool
+    def order_component(component: str, qty: int, supplier: str) -> str:
+        """Stage a component purchase for THIS week (assembly world): buy `qty`
+        units of `component` from `supplier`. Repeat for each component you want
+        to order; they all dispatch together on the route you pass to place_order.
+        A within-week action: it does NOT advance the week -- stage every
+        component order first, then call place_order once to ship them and
+        advance. You assemble finished goods from these components (see the BOM),
+        so keep each component's inventory_position sized to demand over its lead.
+        You may stage from a supplier you have not signed yet IF you sign it in
+        the same week's place_order (the contract resolves before dispatch)."""
+        try:
+            r = svc_order_component(run.world, component, qty, supplier)
+        except ValueError as e:
+            # a wrong call costs the model a correction, never the episode
+            return f"REJECTED (nothing staged): {e}"
+        run.record(run.world.week, "order_component", r)
+        return (f"Staged: {r['qty']} x {r['component']} from {r['supplier']} "
+                f"({r['staged']} order(s) staged this week; place_order ships them).")
+
+    @tool
     def place_order(rationale: str, qty: int, route: str = "",
                     supplier: str = "", contract_action: str = "",
                     contract_supplier: str = "", contract_terms: str = "") -> str:
@@ -120,7 +143,12 @@ def make_tools(run):
             contract = {"action": contract_action,
                         "supplier": contract_supplier or sup or _incumbent(),
                         "terms": contract_terms or None}
-        r = svc_step(run.world, qty, canonical, sup, contract)  # raises on bad input
+        try:
+            r = svc_step(run.world, qty, canonical, sup, contract)
+        except ValueError as e:
+            # bad input: the week does NOT advance and staged component orders
+            # are preserved -- tell the model so it corrects and retries.
+            return (f"REJECTED (week not advanced, staged orders kept): {e}")
         obs = r["obs"]
         run.record(obs.get("week"), "place_order",
                    {"rationale": rationale, "qty": qty, "route": canonical,
@@ -132,6 +160,11 @@ def make_tools(run):
                 f"Week cost {r['cost']}.{tail}\nNew situation:\n{_obs_text(obs)}")
 
     tools = [buy_briefing, place_order]
+    # order_component only exists where there is more than one component to buy
+    # (an assembly/BOM world, e.g. earbuds); a single-component world orders via
+    # place_order's qty and never sees this tool.
+    if len(structure(run.world.cfg.product).component_ids) > 1:
+        tools.insert(1, order_component)
     # buy_audit only exists in the masked-distress task, where the OTIF scorecard
     # lags; in the default world the scorecard is noiseless and an audit is moot.
     if run.world.cfg.sup_mask_otif:
