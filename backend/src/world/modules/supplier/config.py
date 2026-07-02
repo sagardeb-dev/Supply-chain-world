@@ -72,22 +72,40 @@ SUPPLIER_FILL_MEAN = {
 #                   logistics/oracle reads the SAME fields). "sign" is the
 #                   direction of unit_delta; "key" is the extra display key
 #                   (unit_discount / unit_premium), or None for just a delta.
-# ponytail: the per-supplier kernel magnitudes below are calibration knobs --
-# grounded starting personalities (spot cheap/volatile, backup mid, qualified
-# premium/steady), swept later by the benchmark tuning workstream, not final.
+#   quality      -- Phase 3: per-supplier process-quality kernel personality
+#                   (mirrors "kernel"). The quality factor may import SUPPLIERS
+#                   from THIS module for this table only -- it never reads
+#                   supplier STATE, so factored independence (Becker Def. 2)
+#                   still holds. WHO runs its own quality chain in a given
+#                   world is cfg.quality_per_supplier (quality.DRIVES), not
+#                   this table; sid=="" (the legacy global process) resolves
+#                   cfg.q_* instead, exactly as before.
+# ponytail: the per-supplier kernel/quality magnitudes below are calibration
+# knobs -- grounded starting personalities (spot cheap/volatile/dirty, backup
+# mid, qualified premium/steady/clean), swept later by the benchmark tuning
+# workstream, not final.
 SUPPLIERS = {
     "qualified": {"kernel": {"onset": 0.03, "wobble_to_degraded": 0.30,
                              "wobble_to_reliable": 0.55, "degraded_persist": 0.50,
                              "max_degraded": 2, "defunct_from_degraded": 0.0},
                   "otif": 99, "lead": 14, "onboard_weeks": 0,
                   "econ": {"attr": "qualified_premium", "sign": 1,
-                           "key": "unit_premium"}},
+                           "key": "unit_premium"},
+                  "quality": {"drift_onset": 0.03, "out_base": 0.03,
+                              "out_age_slope": 0.02, "drift_recover": 0.40,
+                              "out_recover": 0.50}},
     "spot":      {"kernel": None, "otif": None, "lead": None, "onboard_weeks": 0,
                   "econ": {"attr": "spot_unit_discount", "sign": -1,
-                           "key": "unit_discount"}},
+                           "key": "unit_discount"},
+                  "quality": {"drift_onset": 0.12, "out_base": 0.10,
+                              "out_age_slope": 0.05, "drift_recover": 0.15,
+                              "out_recover": 0.25}},
     "backup":    {"kernel": {"onset": 0.06, "wobble_to_degraded": 0.40,
                              "wobble_to_reliable": 0.40, "degraded_persist": 0.60,
                              "max_degraded": 3, "defunct_from_degraded": 0.03},
                   "otif": 95, "lead": 16, "onboard_weeks": 1,
-                  "econ": {"attr": "backup_unit_delta", "sign": 1, "key": None}},
+                  "econ": {"attr": "backup_unit_delta", "sign": 1, "key": None},
+                  "quality": {"drift_onset": 0.07, "out_base": 0.06,
+                              "out_age_slope": 0.04, "drift_recover": 0.25,
+                              "out_recover": 0.35}},
 }

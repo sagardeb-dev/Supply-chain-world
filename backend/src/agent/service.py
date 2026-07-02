@@ -40,12 +40,14 @@ def svc_expedite(world, qty: int) -> dict:
     return world.expedite_air(qty)
 
 
-def svc_inspect(world) -> dict:
+def svc_inspect(world, supplier: str | None = None) -> dict:
     """Run an incoming inspection on this week's batch (quality lever). A
-    within-week action (does not advance). Mirrors svc_expedite; the engine validates."""
+    within-week action (does not advance). Mirrors svc_expedite; the engine
+    validates -- including whether `supplier` is required (per-supplier
+    quality worlds) or must be omitted (legacy singleton quality)."""
     if world.done:
         raise RuntimeError("episode is done")
-    return world.inspect_batch()
+    return world.inspect_batch(supplier)
 
 
 def svc_order_component(world, component: str, qty: int, supplier: str) -> dict:

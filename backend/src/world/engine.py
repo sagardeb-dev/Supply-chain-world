@@ -155,18 +155,41 @@ class World:
         self.books.air_inbound = flown
         return {"qty": flown, "unit_cost": self.cfg.air_unit_cost}
 
-    def inspect_batch(self) -> dict:
+    def inspect_batch(self, supplier: str | None = None) -> dict:
         """Run an incoming inspection on THIS week's arriving batch: sort and rework
         its defects so most are recovered before they hit the books, at a flat
         cfg.inspect_fee. A within-week action (does NOT advance, like expedite_air).
         Only meaningful where a quality process exists (rich worlds). Does NOT check
         whether quality is actually drifting (that is hidden) -- the agent bets from
-        the noisy aql_result; a wrong bet just wastes the fee."""
+        the noisy aql_result; a wrong bet just wastes the fee.
+
+        Legacy (singleton quality, or no quality process): `supplier` must be
+        None/omitted; scales the whole week's defect_fraction, as before.
+        Phase 3 (per-supplier quality): `supplier` is REQUIRED and must be a
+        known supplier id; scales ONLY that supplier's defect_fraction. One
+        inspection per supplier per week max -- a duplicate call for the same
+        supplier the same week is rejected. The fee is flat PER CALL (so
+        inspecting two suppliers the same week bills the fee twice)."""
         if self.done:
             raise RuntimeError("episode is done; call reset()")
-        if "defect_fraction" not in self._effects():
+        df = self._effects().get("defect_fraction")
+        if df is None:
             raise ValueError("no incoming quality to inspect in this world")
-        self.books.inspected = True
+        if isinstance(df, dict):
+            if supplier is None:
+                raise ValueError(
+                    "this world's quality is per-supplier; pass a supplier id "
+                    f"(one of {sorted(df)})")
+            if supplier not in df:
+                raise ValueError(f"unknown supplier {supplier!r}")
+            if supplier in self.books.inspected_suppliers:
+                raise ValueError(f"{supplier!r} already inspected this week")
+            self.books.inspected_suppliers.add(supplier)
+        else:
+            if supplier is not None:
+                raise ValueError(
+                    "this world's quality is not per-supplier; omit supplier")
+            self.books.inspected = True
         return {"fee": self.cfg.inspect_fee, "catch_rate": self.cfg.inspect_catch_rate}
 
     def stage_order(self, component: str, qty: int, supplier: str) -> dict:
@@ -366,10 +389,20 @@ class World:
         # incoming-inspection lever (quality): sorting/rework recovers a fraction of
         # a bad batch's defects before they stock -- scale THIS week's defect
         # fraction, mirroring the freight-lock override above. logistics.py untouched.
+        # Legacy (scalar defect_fraction): the whole batch is scaled, as before.
+        # Phase 3 (per-supplier dict): only the inspected suppliers' entries are.
         inspected = self.books.inspected
         self.books.inspected = False
-        if inspected and "defect_fraction" in eff:
-            eff["defect_fraction"] *= (1.0 - self.cfg.inspect_catch_rate)
+        inspected_suppliers = self.books.inspected_suppliers
+        self.books.inspected_suppliers = set()
+        if "defect_fraction" in eff:
+            df = eff["defect_fraction"]
+            if isinstance(df, dict):
+                for sid in inspected_suppliers:
+                    if sid in df:
+                        df[sid] *= (1.0 - self.cfg.inspect_catch_rate)
+            elif inspected:
+                eff["defect_fraction"] = df * (1.0 - self.cfg.inspect_catch_rate)
         arrived, served, shortfall, costs = resolve_week(
             self.books, orders, route, self.hidden, self.suppliers,
             self.week, self.cfg, effects=eff)
@@ -389,6 +422,8 @@ class World:
             costs["air"] = self.cfg.air_unit_cost * air
         if inspected:
             costs["inspect"] = self.cfg.inspect_fee
+        elif inspected_suppliers:
+            costs["inspect"] = self.cfg.inspect_fee * len(inspected_suppliers)
         # Lever 3: carrying >=2 live contracts costs a weekly overhead. Counted
         # AFTER the kernel step so a contract whose supplier just died this week
         # no longer counts (it is now open).

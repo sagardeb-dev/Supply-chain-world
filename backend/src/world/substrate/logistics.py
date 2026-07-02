@@ -134,6 +134,7 @@ def resolve_week(books: Books, orders, route: str | None, h: HiddenState,
             s.arrives_week = week + 1
         demurrage = eff.get("demurrage_rate", 0.0) * sum(s.qty for s in landing)
     else:
+        df = eff.get("defect_fraction", 0.0)
         for s in landing:
             # quality (rich world): a defective fraction of arrivals don't stock
             # (effective shortfall) and incur rework; default world -> fraction 0.
@@ -141,7 +142,12 @@ def resolve_week(books: Books, orders, route: str | None, h: HiddenState,
             # summed landing as legacy did -- required for Phase 3's per-supplier
             # attribution (each batch owns its defects). RICH single-product
             # traces shift slightly in multi-landing defective weeks; accepted.
-            defective = round(s.qty * eff.get("defect_fraction", 0.0))
+            # Phase 3: `defect_fraction` may be a per-supplier {sid: frac} map
+            # (cfg.quality_per_supplier) -- each shipment already carries its
+            # `.supplier`, so it's charged its OWN shipper's fraction, not a
+            # global one; a plain scalar (legacy/singleton) applies to everyone.
+            frac = df[s.supplier] if isinstance(df, dict) else df
+            defective = round(s.qty * frac)
             usable = s.qty - defective
             books.components[s.component] += usable
             arrived[s.component] += usable

@@ -76,15 +76,24 @@ def make_tools(run):
                 f"land next week, bypassing the port.")
 
     @tool
-    def inspect_batch() -> str:
+    def inspect_batch(supplier: str = "") -> str:
         """Pay to run an incoming inspection on THIS week's arriving batch: it
         sorts and reworks the defective units so most are recovered before they
         reach your inventory (fewer units lost to defects, less rework). A
         within-week action: it does NOT advance the week -- inspect, then
         place_order in the same week. Use it when your aql_result has been reading
         marginal/reject (the supplier's process looks to be drifting) and a
-        defective batch is landing; on a clean run it is wasted money."""
-        r = svc_inspect(run.world)
+        defective batch is landing; on a clean run it is wasted money.
+
+        In this world, EACH supplier runs its own process quality -- pass
+        `supplier` ("qualified", "spot", or "backup") to target that supplier's
+        incoming batch; only ITS defects are scaled down, the other suppliers'
+        batches are untouched. One inspection per supplier per week (a repeat
+        call for the same supplier the same week is rejected)."""
+        try:
+            r = svc_inspect(run.world, supplier or None)
+        except ValueError as e:
+            return f"REJECTED: {e}"
         run.record(run.world.week, "inspect_batch", r)
         return (f"Inspection ordered (cost {r['fee']:.0f}): sorting this week's "
                 f"batch, recovering ~{r['catch_rate']:.0%} of any defects before "

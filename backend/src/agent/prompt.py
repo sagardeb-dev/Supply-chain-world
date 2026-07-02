@@ -324,6 +324,33 @@ def build_system_prompt(world) -> str:
             "current read, so sourcing each component is a live bet on whose "
             "process is healthy right now.")
         assert base != _b, "all-drift supplier-note anchor drifted"
+    if world.cfg.quality_per_supplier:
+        # Phase 3: quality is no longer one shared process -- each supplier
+        # runs its OWN, so aql_result/rework are now per-supplier too. Gate
+        # strictly on the flag; do not restructure the QUALITY section.
+        _b = base
+        base = base.replace(
+            "When the supplier's process drifts out of control, a fraction of "
+            "your arrivals are defective: they do not stock and they cost "
+            "rework.",
+            "In THIS world EACH supplier runs its OWN process quality (a cheap "
+            "supplier tends dirtier, a premium one cleaner) -- aql_result and "
+            "the defect run are per supplier, not a shared read. When a "
+            "supplier's process drifts out of control, a fraction of ITS "
+            "arrivals are defective: they scrap at receiving (never stock) and "
+            "starve assembly of that component -- for every finished good that "
+            "needs it -- plus rework cost.")
+        assert base != _b, "per-supplier quality-note anchor drifted"
+        _b = base
+        base = base.replace(
+            "inspect_batch the week a batch lands to recover most of them -- "
+            "worth it once you believe the run has turned, wasted on a clean "
+            "batch.",
+            "inspect_batch(supplier) the week that supplier's batch lands to "
+            "recover most of its defects -- it targets ONE supplier's incoming "
+            "batch, worth it once you believe that supplier's run has turned, "
+            "wasted on a clean one.")
+        assert base != _b, "per-supplier inspect-lever anchor drifted"
     if not world.cfg.sup_mask_otif:
         return base
     p = base

@@ -141,6 +141,12 @@ class WorldConfig:
     # the regime off the arrived/rework delta. Gamma multiplier, mean 1.0,
     # CV = 1/sqrt(shape); shape 2.0 -> CV ~0.71 (adjacent regimes overlap).
     q_defect_shape: float = 2.0
+    # Phase 3: when True, EACH supplier runs its OWN quality process (kernel
+    # params live in the SUPPLIERS "quality" profile, cheap supplier tuned
+    # worse) instead of one shared global process. Default False keeps the
+    # legacy world (one shared quality chain, cfg.q_* fields) byte-identical.
+    # The v2 scored assembly world turns this ON alongside sup_all_drift.
+    quality_per_supplier: bool = False
     # incoming-inspection lever (quality): pay a FLAT fee to sort/rework this week's
     # arriving batch, recovering a fraction of its defects before they hit the books
     # (supplier-containment framing -- caught units are replaced, so both the

@@ -2312,3 +2312,191 @@ def test_earbuds_prompt_has_assembly_framing_single_unchanged():
     # single-component CORE world: assembly framing absent (byte-identical strip)
     ws = World(WorldConfig(), registry=CORE); ws.reset(1)
     assert "ASSEMBLY (this is a components/BOM world" not in build_system_prompt(ws)
+
+
+# --- Phase 3: per-supplier quality --------------------------------------
+
+QPS = WorldConfig(product="earbuds", quality_per_supplier=True)
+
+
+def test_per_supplier_defect_attribution():
+    """Phase 3: a per-supplier defect_fraction map (roster quality) charges
+    each landing shipment ONLY its OWN shipper's realized fraction, not a
+    global one -- and a dirty supplier (spot) accumulates materially more
+    scrapped units than a clean one (qualified) shipping the same size batch,
+    over many weeks of the real per-supplier quality kernels."""
+    from src.world.modules.quality import QualityState, step_quality
+    from src.world.substrate.books import Shipment
+
+    rng = random.Random(11)
+    prod = structure("earbuds")
+    roster = {sid: QualityState(sid=sid) for sid in ("spot", "qualified", "backup")}
+    spot_defective = qualified_defective = 0
+    for week in range(1, 41):
+        roster = {sid: step_quality(roster[sid], rng, QPS) for sid in roster}
+        eff = {"defect_fraction": {sid: s.realized_defect for sid, s in roster.items()},
+               "rework_rate": QPS.quality_rework_cost}
+        spot_frac = roster["spot"].realized_defect
+        qual_frac = roster["qualified"].realized_defect
+
+        # Attribution check (the coupled part of this test): resolve a landing
+        # from ONE supplier at a time, in isolation, and read the engine's own
+        # `arrived` output -- it must reflect exactly that shipper's own
+        # fraction (the engine's own round(qty*frac) formula), not the other
+        # supplier's, not a global one.
+        spot_books = Books(components={cid: 0 for cid in prod.component_ids})
+        spot_books.pipeline.append(Shipment(50, "suez", week - 1, "spot",
+                                            component="battery", arrives_week=week))
+        arrived_spot, *_ = resolve_week(spot_books, [], None, CALM, {}, week, QPS,
+                                        effects=eff)
+        assert arrived_spot["battery"] == 50 - round(50 * spot_frac)
+        assert spot_books.components["battery"] == 50 - round(50 * spot_frac)
+
+        qual_books = Books(components={cid: 0 for cid in prod.component_ids})
+        qual_books.pipeline.append(Shipment(50, "suez", week - 1, "qualified",
+                                            component="battery", arrives_week=week))
+        arrived_qual, *_ = resolve_week(qual_books, [], None, CALM, {}, week, QPS,
+                                        effects=eff)
+        assert arrived_qual["battery"] == 50 - round(50 * qual_frac)
+        assert qual_books.components["battery"] == 50 - round(50 * qual_frac)
+
+        spot_defective += 50 - arrived_spot["battery"]
+        qualified_defective += 50 - arrived_qual["battery"]
+    assert spot_defective > qualified_defective * 2, (spot_defective, qualified_defective)
+
+
+def test_defect_scrap_starves_assembly():
+    """A heavily defective landing of the SHARED component (battery) cuts
+    served units for BOTH finished goods (assemble-to-order starves on the
+    scrapped shortfall, exactly like a short-ship supplier would)."""
+    prod = structure("earbuds")
+    books = Books(components={cid: 0 for cid in prod.component_ids})
+    from src.world.substrate.books import Shipment
+    books.pipeline.append(Shipment(20, "suez", 0, "spot", component="battery",
+                                   arrives_week=1))
+    eff = {"defect_fraction": {"spot": 0.9, "qualified": 0.0, "backup": 0.0},
+           "rework_rate": QPS.quality_rework_cost,
+           "demand": {"standard": 20, "pro": 20}}
+    _a, served, short, costs = resolve_week(
+        books, [], None, CALM, {}, 1, QPS, effects=eff)
+    # 90% of the 20-unit battery batch scraps -> only ~2 usable -> both models starve
+    assert served["standard"] < 20 and served["pro"] < 20
+    assert short["standard"] > 0 and short["pro"] > 0
+    assert costs["rework"] > 0
+
+
+def test_inspect_targets_one_supplier():
+    """Two suppliers' batches land the same week; inspect_batch(supplier)
+    targets ONE -- only that supplier's defects drop, the other's rework is
+    unchanged, the week does not advance, the fee is charged once, and a
+    duplicate inspect of the same supplier the same week is rejected."""
+    from src.world.registry import ASSEMBLY
+    from src.world.substrate.books import Shipment
+
+    # -- engine-level: no-advance, fee-once, duplicate-reject --------------
+    w = World(QPS, registry=ASSEMBLY)
+    w.reset(2)                          # incumbent: qualified (sup_mask_otif off)
+    r = w.inspect_batch("spot")
+    assert r["fee"] == w.cfg.inspect_fee
+    assert w.week == 0                                  # within-week: no advance
+    assert w.books.inspected_suppliers == {"spot"}
+    with pytest.raises(ValueError):
+        w.inspect_batch("spot")                         # duplicate rejected
+    assert w.books.inspected_suppliers == {"spot"}       # unchanged by the reject
+    obs, cost, done, _ = w.step({"qty": 0, "route": None})
+    assert w.week == 1
+    # exactly one inspect fee billed this week (one call, despite the duplicate reject)
+    assert obs["cost_breakdown"]["inspect"] == w.cfg.inspect_fee
+
+    # -- substrate-level: only the inspected supplier's fraction is scaled --
+    prod = structure("earbuds")
+    raw = {"spot": 0.4, "qualified": 0.4}      # same true fraction for both
+    scaled = dict(raw)
+    scaled["spot"] *= (1 - QPS.inspect_catch_rate)   # only spot inspected
+    eff_scaled = {"defect_fraction": scaled, "rework_rate": QPS.quality_rework_cost}
+    eff_raw = {"defect_fraction": raw, "rework_rate": QPS.quality_rework_cost}
+
+    # inspected run: both suppliers land, spot's fraction is the SCALED one.
+    books = Books(components={cid: 0 for cid in prod.component_ids})
+    books.pipeline.append(Shipment(50, "suez", 0, "spot", component="battery",
+                                   arrives_week=1))
+    books.pipeline.append(Shipment(50, "suez", 0, "qualified", component="battery",
+                                   arrives_week=1))
+    resolve_week(books, [], None, CALM, {}, 1, QPS, effects=eff_scaled)
+    inspected_battery = books.components["battery"]
+
+    # uninspected baseline run: identical shipments, but both suppliers land
+    # at their RAW (uncaught) fraction -- isolates what the inspect scaling
+    # bought, straight off books.components.
+    books_baseline = Books(components={cid: 0 for cid in prod.component_ids})
+    books_baseline.pipeline.append(Shipment(50, "suez", 0, "spot", component="battery",
+                                            arrives_week=1))
+    books_baseline.pipeline.append(Shipment(50, "suez", 0, "qualified",
+                                            component="battery", arrives_week=1))
+    resolve_week(books_baseline, [], None, CALM, {}, 1, QPS, effects=eff_raw)
+    baseline_battery = books_baseline.components["battery"]
+
+    # the inspected run recovers exactly the units the catch rate saved on
+    # spot's batch alone (qualified's raw-fraction loss is unchanged in both
+    # runs, so the whole delta between the two totals is spot's).
+    spot_savings = round(50 * raw["spot"]) - round(50 * scaled["spot"])
+    assert spot_savings > 0
+    assert inspected_battery - baseline_battery == spot_savings
+
+    # per-shipment isolation: qualified's own landing is byte-identical
+    # whether or not spot was inspected (engine's own round(qty*frac)).
+    qual_only = Books(components={cid: 0 for cid in prod.component_ids})
+    qual_only.pipeline.append(Shipment(50, "suez", 0, "qualified",
+                                       component="battery", arrives_week=1))
+    resolve_week(qual_only, [], None, CALM, {}, 1, QPS, effects=eff_raw)
+    assert qual_only.components["battery"] == 50 - round(50 * raw["qualified"])
+
+
+def test_quality_in_scored_assembly_obs():
+    """The earbuds run on the ASSEMBLY registry (Phase 3's scored world): obs
+    carries a per-supplier `aql_result`, the cost breakdown gains `rework`
+    when a defective batch lands, and the leak-guard still holds (no hidden
+    quality regime ever surfaces)."""
+    from src.world.registry import ASSEMBLY
+    assert [m.id for m in ASSEMBLY] == ["disruption", "supplier", "demand", "quality"]
+    prod = structure("earbuds")
+
+    found_rework = False
+    for seed in range(1, 8):
+        w = World(QPS, registry=ASSEMBLY)
+        obs = w.reset(seed)
+        assert isinstance(obs["aql_result"], dict)
+        assert set(obs["aql_result"]) == {"spot", "qualified", "backup"}
+        assert not (HIDDEN_KEYS & obs.keys())
+        for week in range(1, 27):
+            for cid in prod.component_ids:
+                w.stage_order(cid, 30, "qualified")
+            obs, cost, done, _ = w.step({"route": "suez"})
+            assert not (HIDDEN_KEYS & obs.keys())
+            assert isinstance(obs["aql_result"], dict)
+            if obs["cost_breakdown"].get("rework", 0) > 0:
+                found_rework = True
+            if done:
+                break
+        if found_rework:
+            break
+    assert found_rework, "no defective batch landed across 7 seeds (seed unlucky?)"
+
+
+def test_legacy_quality_untouched():
+    """flag OFF (default WorldConfig): the RICH-world singleton quality process
+    behaves byte-identically -- one QualityState with sid=='', drives==('',),
+    and step_quality resolves the SAME cfg.q_* fields as before Phase 3."""
+    from src.world.modules.quality import QualityState, DRIVES, step_quality
+    cfg = WorldConfig()
+    assert DRIVES(cfg) == ("",)
+    q = QualityState()
+    assert q.sid == ""
+    q2 = step_quality(q, random.Random(5), cfg)
+    ref = step_quality(QualityState(), random.Random(5), cfg)
+    assert q2 == ref
+    from src.world.registry import RICH, _init_quality
+    assert isinstance(_init_quality(cfg), QualityState)  # singleton, not a roster
+    w = World(cfg, registry=RICH); w.reset(9)
+    assert isinstance(w.module_states["quality"], QualityState)
+    assert isinstance(w._build_obs(arrived=0, costs={})["aql_result"], str)

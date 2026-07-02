@@ -21,7 +21,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 
 from src.world import World, WorldConfig
-from src.world.registry import CORE, RICH
+from src.world.registry import ASSEMBLY, CORE, RICH
 
 STATUS_MARK = {"at_sea": "", "queued_at_suez": "Q", "diverted_via_cape": "D"}
 
@@ -39,8 +39,12 @@ def run_agent(seed, model, mode, semantics, rich, product="single"):
     from .factory import build_agent
     from .prompt import build_system_prompt
 
+    # --rich always wins (the full six-factor stretch); else an assembly
+    # product (earbuds) gets ASSEMBLY (Phase 3: CORE + per-supplier quality),
+    # a single-component product the plain scored CORE world.
+    registry = RICH if rich else (ASSEMBLY if product != "single" else CORE)
     run = AgentRun(uuid4().hex, seed, model, mode, semantics,
-                   registry=RICH if rich else CORE, product=product)
+                   registry=registry, product=product)
     agent = build_agent(model, mode, make_tools(run), MemorySaver(),
                         build_system_prompt(run.world))
     config = {"configurable": {"thread_id": run.run_id}, "recursion_limit": 200}

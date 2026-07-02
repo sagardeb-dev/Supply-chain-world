@@ -77,6 +77,12 @@ def _init_port(cfg):
 
 
 def _init_quality(cfg):
+    # legacy: the singleton global process (byte-identical). Phase 3
+    # (cfg.quality_per_supplier): a roster, one QualityState per supplier id,
+    # each carrying its own sid so step_quality resolves its own kernel
+    # personality (mirrors _init_supplier).
+    if cfg.quality_per_supplier:
+        return {sid: quality.QualityState(sid=sid) for sid in supplier.SUPPLIERS}
     return quality.QualityState()
 
 
@@ -142,6 +148,14 @@ CORE: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND)
 # The full six-factor world (goals 2/3). Factors APPEND after the base two, so
 # each new factor's rng draws come last and the disruption-only golden holds.
 RICH: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND, FREIGHT, PORT, QUALITY)
+
+# ASSEMBLY: the v2 scored world (Phase 3) -- CORE (disruption, supplier,
+# demand) plus QUALITY, so the assembly world's cost includes per-supplier
+# process quality/rework alongside the all-drift supplier bet. Quality APPENDS
+# after demand (registry order = rng draw order), so CORE's own trajectory is
+# unperturbed by turning quality on. Used for product != "single" runs (the
+# earbuds/assembly agent harness); freight/port stay RICH-only additions.
+ASSEMBLY: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND, QUALITY)
 
 
 # ponytail: the paid analyst_briefing is deliberately NOT in any module's emit

@@ -8,7 +8,7 @@ from statistics import NormalDist
 from src.world.config import WorldConfig
 from src.world.engine import World
 from src.world.products import structure
-from src.world.registry import CORE
+from src.world.registry import ASSEMBLY, CORE
 
 
 def _qualified_action(w, base: dict) -> dict:
@@ -157,8 +157,10 @@ def flat_component_policy_cost(seed: int, cfg: WorldConfig, registry=None) -> fl
 
 def _teeth_cfg() -> WorldConfig:
     """The v2 scored world the sourcing bet lives in: earbuds assembly + all
-    three suppliers drifting, masked like the agent's world (spot incumbent)."""
-    return WorldConfig(product="earbuds", sup_all_drift=True, sup_mask_otif=True)
+    three suppliers drifting + per-supplier quality, masked like the agent's
+    world (spot incumbent)."""
+    return WorldConfig(product="earbuds", sup_all_drift=True, sup_mask_otif=True,
+                       quality_per_supplier=True)
 
 
 def _spot_band(obs) -> str:
@@ -199,7 +201,9 @@ def drive_greedy_cheap(seed: int, cfg: WorldConfig = None):
     per-component order-up-to sizing as drive_component_base_stock. The naive
     cost-chaser: great while spot is healthy, exposed when it wobbles/dies."""
     cfg = cfg or _teeth_cfg()
-    w = World(cfg, registry=CORE)
+    # the finished v2 world: quality rides along, so a dirty supplier costs
+    # rework/scrap on top of short-ships
+    w = World(cfg, registry=ASSEMBLY if cfg.quality_per_supplier else CORE)
     obs = w.reset(seed)
     prod = structure(cfg.product)
     S = _component_S(cfg, prod)
@@ -213,7 +217,9 @@ def drive_reactive_switch(seed: int, cfg: WorldConfig = None):
     slipping/failing/defunct, source qualified instead (and switch back when spot
     recovers to ontime). Same order-up-to sizing. The band-reactive hedger."""
     cfg = cfg or _teeth_cfg()
-    w = World(cfg, registry=CORE)
+    # the finished v2 world: quality rides along, so a dirty supplier costs
+    # rework/scrap on top of short-ships
+    w = World(cfg, registry=ASSEMBLY if cfg.quality_per_supplier else CORE)
     obs = w.reset(seed)
     prod = structure(cfg.product)
     S = _component_S(cfg, prod)

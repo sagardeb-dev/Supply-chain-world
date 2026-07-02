@@ -72,6 +72,11 @@ class Books:
         self.freight_lock = None  # FreightLock | None: a live forward freight buy
         self.air_inbound = 0  # units flown in this week (expedite_air), landed at the next resolve
         self.inspected = False  # inspect_batch flag for this week; consumed at the next resolve
+        # Phase 3 (per-supplier quality worlds): which supplier ids were
+        # inspected THIS week (inspect_batch(supplier)); consumed at the next
+        # resolve alongside `inspected`. Empty in the legacy (singleton-quality
+        # or no-quality) world, so it never changes legacy behaviour.
+        self.inspected_suppliers: set = set()
 
     @property
     def inventory(self) -> int:
