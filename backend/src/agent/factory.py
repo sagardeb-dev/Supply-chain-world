@@ -23,6 +23,10 @@ def build_model(model_slug: str) -> ChatOpenAI:
         api_key=key,
         temperature=0,
         streaming=True,
+        # ponytail: OpenAI caches automatically; Anthropic needs this top-level
+        # flag (auto-advancing breakpoint, cache reads billed at 0.1x)
+        extra_body=({"cache_control": {"type": "ephemeral"}}
+                    if model_slug.startswith("anthropic/") else None),
     )
 
 

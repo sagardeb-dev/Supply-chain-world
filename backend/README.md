@@ -11,7 +11,9 @@ src/
   agent/   the LLM agent harness (drives a World through the OpenRouter API)
   api/     FastAPI app: world HTTP API + SSE stream + static frontend
 test_world.py   the single regression file (engine, world, agent, API)
-report_oracle.py  prints the base-stock / fixed-policy benchmark summary
+report_oracle.py  prints the base-stock / fixed-policy benchmark summary (the floor)
+filters.py        exact per-factor HMM forward filters (RICH latent modules)
+oracle_policy.py  Bayes-filter fair oracle: rolling-horizon policy over filters.py's posteriors (the mid-tier baseline)
 V1_CHANGE_LOG.md  every calibrated magnitude and its real-world source
 ```
 
@@ -29,11 +31,14 @@ binding invariants in [`src/world/AGENTS.md`](src/world/AGENTS.md).
 
 ## `src/agent/` — the harness
 
-Wraps a `World` in the tools an LLM agent calls (`place_order`, `buy_briefing`,
-and `lock_freight` in freight-enabled worlds), builds a `deepagents` agent on an OpenRouter
-model, and runs an episode while recording every decision. `play_agent.py` is the
-headless entry point used to produce the traces in [`../run/`](../run). See
-[`src/agent/README.md`](src/agent/README.md).
+Wraps a `World` in the tools an LLM agent calls. `place_order` and
+`buy_briefing` are always bound; `buy_audit`, `lock_freight`, `expedite_air`,
+`inspect_batch`, and `order_component` are bound only when the world's
+registry/product actually has the module they act on (registry/product-gated
+tools — see [`src/agent/README.md`](src/agent/README.md)). Builds a
+`deepagents` agent on an OpenRouter model, and runs an episode while recording
+every decision. `play_agent.py` is the headless entry point used to produce
+the traces in [`../run/`](../run) and `runs/`.
 
 ## `src/api/` — the server
 

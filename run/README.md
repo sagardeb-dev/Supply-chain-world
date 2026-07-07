@@ -1,5 +1,14 @@
 # `run/` — recorded agent episodes
 
+**Historical.** These traces were recorded under an earlier version of the
+code: `qty` was still a fixed `{0, 20, 40}` menu (now a free integer
+`0..cfg.order_max`), and the agent only had three tools (`place_order`,
+`buy_briefing`, `lock_freight` — now the tool set is registry/product-gated
+and also includes `buy_audit`, `expedite_air`, `inspect_batch`, and
+`order_component` where applicable). Re-running the same seeds/models today
+would produce different traces and scores. For current experiment output see
+`backend/runs/` (e.g. `backend/runs/ladder-v1/`, 9 seeds x 2 models, complete).
+
 Full traces of LLM agents playing the six-factor (`RICH`) world, for two seeds
 (8 and 19) across the capable GPT-5 tier (`gpt-5`, `gpt-5.1`, `gpt-5.2`,
 `gpt-5.4`). Each file is one complete 26-week episode: the agent's per-week

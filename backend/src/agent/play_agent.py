@@ -359,6 +359,9 @@ def main():
     ap.add_argument("--semantics", choices=["real", "anon"], default="real")
     ap.add_argument("--product", choices=["single", "earbuds"], default="single",
                     help="product structure: earbuds = the assembly/BOM world")
+    ap.add_argument("--exp", default="adhoc",
+                    help="experiment name; the trace saves under "
+                         "runs/<exp>/<model>/seed<N>[...].chat.txt")
     ap.add_argument("--coached", action="store_true",
                     help="append THE PLAYBOOK (operator advice) to the system "
                          "prompt -- the ablation arm; default is the faithful "
@@ -380,11 +383,14 @@ def main():
                                 args.coached)
         print_summary(world)
         print_supplier_summary(world)
-        # persist: the user hit "where's the trace?" twice -- stdout isn't enough
+        # persist: the user hit "where's the trace?" twice -- stdout isn't enough.
+        # Layout: runs/<experiment>/<model>/seed<N>[-earbuds][-rich][-coached].chat.txt
         tag = "" if args.product == "single" else f"-{args.product}"
+        tag += "-rich" if args.rich else ""
         tag += "-coached" if args.coached else ""
-        out = Path("runs") / f"seed{args.seed}{tag}-{args.model.replace('/', '-')}.chat.txt"
-        out.parent.mkdir(exist_ok=True)
+        out = (Path("runs") / args.exp / args.model.replace("/", "-")
+               / f"seed{args.seed}{tag}.chat.txt")
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(chat + "\n")
         print(f"\nsaved {out}")
 
