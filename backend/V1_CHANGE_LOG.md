@@ -3,7 +3,41 @@
 Design decisions for the supply-chain POMDP world. Each entry records what
 changed, why, and the evidence. Code follows this file, never the reverse.
 
+## 2026-07-07 — Inventory-management redesign: oracle deleted, qty freed, ladder-v1 complete
+
+### What changed since the last entry
+
+- **The legacy `CausalOracle` (and `clairvoyant`/`resolve_rel`) are deleted**
+  (commit `02e6d4c`). It was a disruption-only DP anchor from the earlier
+  2-factor benchmark and was never a design constraint on the redesigned task
+  — see memory `oracle-not-a-constraint`. The `4251.9607875333395` anchor value
+  and the golden pins built around it no longer exist in code.
+- **Order quantity is a free integer**, `0 <= qty <= cfg.order_max` (100,
+  ~5 weeks of mean demand) — the old `{0, 20, 40}` menu is gone from
+  `config.py`, `api/app.py`, and every tool/oracle surface.
+- **`CORE` (disruption + supplier + demand) is now the scored single-product
+  task.** `RICH` (+ freight, port, quality) and `ASSEMBLY` (`CORE` + per-supplier
+  quality for the multi-SKU `earbuds` BOM product) both exist as registries;
+  bare `World()` still defaults to the legacy 2-factor `REGISTRY`.
+- **A Bayes-filter fair oracle replaces the old causal DP as the mid-tier
+  baseline**: `backend/filters.py` (Phase 1 — exact per-factor HMM forward
+  filters for the four RICH latent modules) and `backend/oracle_policy.py`
+  (Phase 2 — `run_oracle`, a rolling-horizon Monte Carlo k-sample policy over
+  those filters' posteriors). The floor stack (`fixed_policy_cost` +
+  `base_stock_cost` in `report_oracle.py`) is unchanged. A clairvoyant ceiling
+  is planned, not built.
+- **`ladder-v1` is complete**: 9 seeds x 2 models, full traces under
+  `runs/ladder-v1/`, skill table in `runs/ladder-v1/skill.md`.
+
+### Superseded sections below
+
+The `CausalOracle` anchor value and the `{0, 20, 40}` action space described in
+the entries below are historical record of what shipped at the time — kept for
+context, not current behavior. See the per-section `[SUPERSEDED]` notes.
+
 ## 2026-06-18 — Module-contract refactor (structural; behavior byte-identical)
+
+[SUPERSEDED — see 2026-07-07 entry: the `CausalOracle` anchor this entry pins is deleted]
 
 ### Problem
 
@@ -161,6 +195,8 @@ benchmark's entire value — survives.
 | break fee 10.0 | early-termination clauses are standard teeth on supply contracts |
 
 ## 2026-06-17 — LLM agent harness (deepagents, OpenRouter, SSE, resume)
+
+[SUPERSEDED — see 2026-07-07 entry: qty is now a free integer, not the {0,20,40} menu; the tool set is registry/product-gated, not the fixed three described below]
 
 ### Problem
 
@@ -362,6 +398,8 @@ Verification results (2026-06-12 sign-off):
 
 ## 2026-06-11 (c) — Causal-aware oracle: the benchmark anchor
 
+[SUPERSEDED — see 2026-07-07 entry: this oracle (`CausalOracle`/`causal_oracle.py`) is deleted; the current mid-tier baseline is the Bayes-filter fair oracle (`filters.py` + `oracle_policy.py`)]
+
 ### Problem
 
 The clairvoyant oracle is luck-INCLUSIVE: it reads the realized future, so
@@ -453,6 +491,8 @@ the true kernel — no future knowledge.
   recorded as an open design question, not changed here.
 
 ## 2026-06-11 (b) — V2 task surface: the real planner job
+
+[SUPERSEDED — see 2026-07-07 entry: the {0,20,40} action space below was later replaced by a free integer 0..order_max]
 
 ### Problem
 

@@ -28,7 +28,8 @@ STATUS_MARK = {"at_sea": "", "queued_at_suez": "Q", "diverted_via_cape": "D"}
 
 # --- running -------------------------------------------------------------
 
-def run_agent(seed, model, mode, semantics, rich, product="single"):
+def run_agent(seed, model, mode, semantics, rich, product="single",
+              coached=False):
     """Stream the agent through the episode, printing it as a chat as it goes:
     the agent's reasoning, the order it places, then the world's reply with the
     hidden tape annotated. Returns (world, the printed chat as one string)."""
@@ -46,7 +47,7 @@ def run_agent(seed, model, mode, semantics, rich, product="single"):
     run = AgentRun(uuid4().hex, seed, model, mode, semantics,
                    registry=registry, product=product)
     agent = build_agent(model, mode, make_tools(run), MemorySaver(),
-                        build_system_prompt(run.world))
+                        build_system_prompt(run.world, coached=coached))
     config = {"configurable": {"thread_id": run.run_id}, "recursion_limit": 200}
     kickoff = {"messages": [{"role": "user", "content": kickoff_message(run.world)}]}
 
@@ -56,9 +57,27 @@ def run_agent(seed, model, mode, semantics, rich, product="single"):
         log.append(s)
 
     wk0 = run.world.trace[0]
-    emit(f"{model} on seed {seed} ({'RICH 6-factor' if rich else 'CORE 3-factor'})\n")
-    emit(f"WEEK 0  {_obs_summary(wk0['obs'])}")
-    emit(f"        hidden: {_fmt_hidden(wk0)}")
+    emit(f"{model} on seed {seed} ({'RICH 6-factor' if rich else 'CORE 3-factor'})"
+         f"{' [COACHED]' if coached else ''}\n")
+    emit(f"WEEK 0 SITUATION  {_obs_summary(wk0['obs'])}")
+    emit(f"                  hidden: {_fmt_hidden(wk0)}")
+
+    # every tool CALL is buffered by id and printed the moment its RESULT
+    # arrives, so call and result sit together even when the model fires
+    # several calls in parallel (langgraph delivers all the AIMessage calls
+    # first, then the ToolMessages -- printing calls eagerly is what produced
+    # the out-of-order STAGE clumps).
+    pending: dict[str, str] = {}
+    in_week = False   # a "== DECIDING WEEK n ==" header is open
+
+    def week_header():
+        nonlocal in_week
+        if not in_week:
+            head = ("WRAP-UP (episode over)" if run.world.done
+                    else f"DECIDING WEEK {run.world.week}")
+            emit(f"\n{'=' * 26} {head} {'=' * 26}")
+            in_week = True
+
     for update in agent.stream(kickoff, config, stream_mode="updates"):
         if not isinstance(update, dict):
             continue
@@ -67,39 +86,52 @@ def run_agent(seed, model, mode, semantics, rich, product="single"):
                 continue
             for m in delta.get("messages", []):
                 if isinstance(m, AIMessage):
+                    week_header()
                     txt = _msg_text(m)
                     if txt:
-                        emit("\nAGENT  " + textwrap.fill(
-                            txt, 78, subsequent_indent="       "))
+                        emit("\nAGENT")
+                        emit(_wrap_block(txt))
                     for tc in (m.tool_calls or []):
                         args = {k: v for k, v in (tc.get("args") or {}).items()
                                 if v not in ("", None)}
-                        rat = args.pop("rationale", None)  # the required per-week reasoning
+                        rat = args.pop("rationale", None)  # required per-week reasoning
+                        call = ("\n  >> " + tc["name"] + "("
+                                + ", ".join(f"{k}={v}" for k, v in args.items())
+                                + ")")
                         if rat:
-                            emit("\nREASON " + textwrap.fill(
-                                str(rat), 78, subsequent_indent="       "))
-                        emit("  >> " + tc["name"] + "("
-                             + ", ".join(f"{k}={v}" for k, v in args.items()) + ")")
-                elif isinstance(m, ToolMessage) and m.name == "place_order":
+                            call += "\n" + _wrap_block(
+                                "RATIONALE: " + str(rat), indent="     ")
+                        pending[tc.get("id") or tc["name"]] = call
+                elif isinstance(m, ToolMessage):
+                    emit(pending.pop(
+                        getattr(m, "tool_call_id", None) or m.name,
+                        f"\n  >> {m.name}(?)"))
+                    content = str(m.content)
+                    if m.name != "place_order" or content.startswith("REJECTED"):
+                        # ponytail: a rejected place_order never advanced the
+                        # world -- print the rejection, NOT a stale WORLD block.
+                        emit(_wrap_block(content, indent="     <- "))
+                        continue
                     p, rec = run.recorder[-1]["payload"], run.world.trace[-1]
-                    emit(f"WORLD  week {rec['week']}  cost ${p['cost']:.0f}  "
-                         f"cum ${run.world.total_cost:.0f}"
-                         + ("  ** DONE **" if p["done"] else ""))
-                    emit(f"       {_obs_summary(p['obs'])}")
-                    emit(f"       hidden: {_fmt_hidden(rec)}")
-                elif isinstance(m, ToolMessage) and m.name == "buy_briefing":
-                    emit("  ANALYST: " + str(m.content))
-                elif isinstance(m, ToolMessage) and m.name == "buy_audit":
-                    emit("  AUDIT: " + str(m.content))
-                elif isinstance(m, ToolMessage) and m.name == "lock_freight":
-                    emit("  FREIGHT: " + str(m.content))
-                elif isinstance(m, ToolMessage) and m.name == "expedite_air":
-                    emit("  AIR: " + str(m.content))
-                elif isinstance(m, ToolMessage) and m.name == "inspect_batch":
-                    emit("  QC: " + str(m.content))
-                elif isinstance(m, ToolMessage) and m.name == "order_component":
-                    emit("  STAGE: " + str(m.content))
+                    in_week = False
+                    emit(f"\nWORLD ADVANCED -> week {rec['week']}  "
+                         f"week cost ${p['cost']:.0f}  cum ${run.world.total_cost:.0f}"
+                         + ("  ** EPISODE DONE **" if p["done"] else ""))
+                    emit(f"  SITUATION  {_obs_summary(p['obs'])}")
+                    emit(f"  hidden: {_fmt_hidden(rec)}")
     return run.world, "\n".join(log)
+
+
+def _wrap_block(txt: str, indent: str = "       ") -> str:
+    """Wrap long lines to the trace width while PRESERVING the model's own
+    newlines/bullets -- textwrap.fill on the whole blob used to collapse a
+    formatted answer into one paragraph."""
+    cont = " " * len(indent)
+    out = []
+    for ln in str(txt).splitlines():
+        out.append(textwrap.fill(ln, 78, initial_indent=indent,
+                                 subsequent_indent=cont) if ln.strip() else "")
+    return "\n".join(out)
 
 
 def _msg_text(m) -> str:
@@ -200,7 +232,15 @@ def _fmt_spot(obs):
 
 def _regime(hs, factor):
     st = hs.get(factor)
-    return st.get("regime", "-") if isinstance(st, dict) else "-"
+    if not isinstance(st, dict):
+        return "-"
+    if "regime" in st:
+        return st["regime"]
+    # roster module (demand per FG, quality per supplier): {id: state}. One id
+    # ("unit"/""), show just the regime; several, label each.
+    if len(st) == 1:
+        return next(iter(st.values())).get("regime", "-")
+    return ",".join(f"{k}:{v.get('regime', '-')}" for k, v in st.items()) or "-"
 
 
 def _fmt_hidden(rec):
@@ -319,6 +359,13 @@ def main():
     ap.add_argument("--semantics", choices=["real", "anon"], default="real")
     ap.add_argument("--product", choices=["single", "earbuds"], default="single",
                     help="product structure: earbuds = the assembly/BOM world")
+    ap.add_argument("--exp", default="adhoc",
+                    help="experiment name; the trace saves under "
+                         "runs/<exp>/<model>/seed<N>[...].chat.txt")
+    ap.add_argument("--coached", action="store_true",
+                    help="append THE PLAYBOOK (operator advice) to the system "
+                         "prompt -- the ablation arm; default is the faithful "
+                         "rules-only prompt")
     args = ap.parse_args()
     if not args.policy and not args.model:
         ap.error("--model is required (no default) unless you pass --policy")
@@ -332,13 +379,18 @@ def main():
         print_supplier_summary(world)
     else:
         world, chat = run_agent(args.seed, args.model, args.mode,
-                                args.semantics, args.rich, args.product)
+                                args.semantics, args.rich, args.product,
+                                args.coached)
         print_summary(world)
         print_supplier_summary(world)
-        # persist: the user hit "where's the trace?" twice -- stdout isn't enough
+        # persist: the user hit "where's the trace?" twice -- stdout isn't enough.
+        # Layout: runs/<experiment>/<model>/seed<N>[-earbuds][-rich][-coached].chat.txt
         tag = "" if args.product == "single" else f"-{args.product}"
-        out = Path("runs") / f"seed{args.seed}{tag}-{args.model.replace('/', '-')}.chat.txt"
-        out.parent.mkdir(exist_ok=True)
+        tag += "-rich" if args.rich else ""
+        tag += "-coached" if args.coached else ""
+        out = (Path("runs") / args.exp / args.model.replace("/", "-")
+               / f"seed{args.seed}{tag}.chat.txt")
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(chat + "\n")
         print(f"\nsaved {out}")
 

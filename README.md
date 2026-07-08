@@ -152,12 +152,14 @@ dependency, `three`, is loaded from a CDN via an import map in
     backend/
       src/world/             the factored-POMDP world (pure stdlib, no I/O)
         engine.py            World: the reset()/step() orchestrator
-        registry.py          composes modules into REGISTRY / CORE / RICH
+        registry.py          composes modules into REGISTRY / CORE / RICH (+ ASSEMBLY, same tuple as RICH on the multi-SKU earbuds product)
         config.py            global scalar knobs
         couplings.py         the only code that reads two factors (in cost)
         modules/             Tier 1 — the six latent factors, each a sealed box
         substrate/           Tier 2 — module-agnostic ships / inventory / logistics
-      report_oracle.py       per-seed baseline policies (fixed-route + base-stock)
+      report_oracle.py       per-seed baseline policies (fixed-route + base-stock; the floor)
+      filters.py             exact per-factor HMM forward filters (RICH latent modules)
+      oracle_policy.py       Bayes-filter fair oracle (rolling-horizon policy over filters.py; the mid-tier baseline)
       src/agent/             LLM agent harness (deepagents, OpenRouter, SSE)
       src/api/               FastAPI app (world API + agent runs + static frontend)
       test_world.py          the single regression file (engine, world, agent, API)

@@ -1,0 +1,159 @@
+You run the import replenishment desk for a European importer on the Asia-
+Europe shipping lane. You will run it for 26 weeks. Your one objective is to
+MINIMIZE TOTAL COST over the whole 26-week horizon -- not any single week.
+
+THE WEEK
+Each week you see the current situation, then make exactly one decision by
+calling place_order. The world advances only when you call place_order. You
+start with 80 units on hand. Demand is roughly 20 units a week (it drifts --
+see DEMAND below), served from on-hand inventory; unmet demand is a stockout.
+
+YOUR LEVERS (these are the only actions; mirror them exactly)
+- place_order(rationale, qty, route, supplier, contract_action,
+  contract_supplier, contract_terms): one weekly decision that may place an
+  order, manage a contract, or both.
+  - rationale (REQUIRED, every week): a few sentences working through THIS
+week's decision and why this qty/route/supplier (and any contract). The world
+does not advance without it.
+  - qty: any whole number of units to order this week, from 0 up to 100. 0 =
+order nothing (no route/supplier needed). There is no fixed menu.
+  - route "suez" or "cape" (required if qty > 0):
+    - "suez": base 4/unit, faster (~3 weeks), but the Suez/Red Sea corridor
+can be disrupted -- a ship caught at the canal during a disruption waits, then
+diverts around the Cape (arriving much later and billed the Cape price
+difference).
+    - "cape": base 6/unit, slower (~4 weeks), but it bypasses the Suez
+corridor and is reliable.
+  - supplier "qualified", "spot", or "backup" (required if qty > 0). You may
+only source a supplier you hold a LIVE contract with -- see CONTRACTS and the
+`contracts` / `contract_open` keys in the report.
+  - to manage a contract THIS week, set contract_action ("sign", "switch",
+"renew", or "lapse"), contract_supplier, and (for sign/switch/renew)
+contract_terms ("short", "long", "strict", "lenient"). The contract resolves
+BEFORE the order, so you can sign a supplier and source it in the same call.
+Use qty 0 to manage a contract without ordering.
+- buy_briefing(): pay 30 for a one-line analyst assessment of THIS week's LANE
+  state (the Suez corridor), before you order. Optional.
+- buy_audit(): pay 25 for a direct read of your spot supplier's current
+  reliability state, before you order. Optional.
+- lock_freight(weeks): forward-buy the freight rate -- FIX this week's freight
+  cost multiplier for the next `weeks` weeks. While locked you pay the locked
+  rate regardless of the spot index: it shields you from a rate spike, but you
+  forgo a drop, and an unused week still burns the window. A within-week
+  action (it does NOT advance the week); lock, then place_order in the same
+  week to ship at the locked rate. The active lock shows as `freight_lock`
+  (rate + weeks_left) in the report.
+- expedite_air(qty): fly units in on a fast air lane that BYPASSES the
+  destination port -- they land in your inventory NEXT week regardless of port
+  congestion, at 15/unit, capped at 20 units a week. A within-week action (it
+  does NOT advance the week); expedite, then place_order in the same week.
+- inspect_batch(): pay 40 to run an incoming inspection on THIS week's
+  arriving batch -- it sorts and reworks the defects, recovering about 70% of
+  them before they stock (fewer units lost to defects, less rework). A within-
+  week action (it does NOT advance the week); inspect, then place_order in the
+  same week.
+
+SUPPLIERS (who you buy from -- pick per order)
+- qualified (the incumbent): reliable (99% OTIF), but dearest -- it adds
+  1.0/unit over the route base (Suez 5/unit, Cape 7/unit). Always ships your
+  full quantity. Evergreen contract. In this task you are NOT contracted to
+  qualified at the start -- sign it to migrate off spot when you judge spot
+  has turned.
+- spot (YOUR STARTING INCUMBENT: you begin already contracted to it and source
+  it by default): cheapest -- 1.5/unit BELOW the route base (Suez 2.5/unit,
+  Cape 4.5/unit) -- but its reliability DRIFTS and you cannot see it directly.
+  A healthy spot ships your full qty; a wobbling one ships only about HALF; a
+  degraded one ships NOTHING; and it can go DEFUNCT (fail for good, gone for
+  the rest of the horizon). Its OTIF scorecard (ontime / slipping / failing /
+  defunct) is the contracted on-time metric; you also see your realized
+  experience with spot -- realized_fill (how much of an order actually shipped
+  when you sourced it) and realized_lead_slip (its reported lead-time this
+  week), both noisy week to week. buy_audit gives a direct read of its current
+  state. "slipping" is ambiguous -- it is either a wobble that recovers or the
+  first week of a real failure; the following weeks tell you which. AND a spot
+  shortfall DURING a lane disruption is back-ordered at a crisis rate about 3x
+  a normal stockout.
+- backup (a second qualified source): reliable (95% OTIF), a small premium
+  (+0.3/unit over the route base), but it needs 1 week of onboarding before
+  its FIRST order can ship.
+
+CONTRACTS (the gate on sourcing)
+- You can only source a supplier you currently hold a live contract with. The
+  report shows your `contracts`, `contract_open` (contracts that have expired
+  or whose supplier died -- these need renewing), and `term_menu`.
+- contract_action "sign"/"switch"/"renew" opens a fresh contract on the chosen
+  supplier with the chosen terms; "lapse" drops an open contract (surrender).
+  A contract auto-opens when it expires or its supplier dies, and qualified's
+  contract is evergreen.
+- terms menu (the locked unit price is set off the Suez base, 4/unit):
+    - "short": 4 weeks, ~3% cheaper, easy to exit.
+    - "long": 12 weeks, ~6% dearer (a price-lock), hard to exit.
+    - "strict": 8 weeks, high OTIF floor (the supplier owes you on a slip).
+    - "lenient": 8 weeks, ~5% cheaper, no real penalty -- you eat the risk.
+- Carrying 2 or more live contracts costs 4/week (dual-source overhead).
+
+COSTS (every number is real; weigh them)
+- shipping: the route base, adjusted for the supplier (above), then scaled by
+  the freight index (see FREIGHT), paid when you order.
+- holding: 1 per unit per week -- on inventory ON HAND and IN TRANSIT (capital
+  on the water still costs you).
+- stockout: 20 per unit of unmet demand in a week.
+- surcharge: a Suez ship diverted around the Cape is billed the Cape-vs-Suez
+  difference.
+- demurrage: 2 per held unit per week when the destination port holds your
+  arrivals (see PORT).
+- air: 15 per unit when you expedite_air to fly units past a jammed port (see
+  PORT).
+- rework: 15 per defective unit when quality is off (see QUALITY).
+- inspect: 40 when you inspect_batch to sort a bad arriving batch (see
+  QUALITY).
+- briefing: 30 each; dual-source overhead: 4/week.
+
+WHAT YOU SEE EACH WEEK (your only signals; the latent ones are NOISY)
+- week, inventory, arrived, and pipeline (your in-flight shipments with
+  estimated arrival weeks).
+- inventory_position and on_order: on_order is the total units already ordered
+  but not yet arrived (your pipeline); inventory_position = inventory on hand
+  + on_order.
+- LANE: suez_count, bab_count, cape_count (ships that transited the Suez
+  Canal, the Bab-el-Mandeb strait, and the Cape this week) plus a trade-press
+  bulletin.
+- SUPPLIERS: an OTIF scorecard per supplier (band + on-time % + quoted lead).
+  For spot you also see realized_fill (actual vs ordered, when you sourced it)
+  and realized_lead_slip (its reported lead behaviour this week).
+- DEMAND: pos_units (what actually sold this week) and demand_forecast (a
+  forward read). Both noisy. Underlying demand drifts between normal, short
+  promo spikes, sustained seasonal lifts, and a sticky structural decline.
+- FREIGHT: freight_index (this week's spot-rate level; ~100 is normal) and
+  freight_outlook (a noisier forward read). Your shipping cost is scaled by
+  the index the week you order. The underlying rate regime drifts between
+  slack (cheap), normal, tightening, and a costly spike.
+- PORT: berth_wait (days) and wait_outlook. When the destination port congests
+  or a customs hold lands, your arrivals are held a week and accrue demurrage.
+- QUALITY: aql_result (accept / marginal / reject -- incoming inspection).
+  When the supplier's process drifts out of control, a fraction of your
+  arrivals are defective: they do not stock and they cost rework.
+- cost_breakdown: what last week cost you, by category.
+
+THE LANE STRUCTURE (told to you plainly -- use it)
+There is a disruption process on the Suez corridor that you cannot observe
+directly. It builds up, may or may not break into a real disruption, and if it
+does, the disruption is either short (clears within a couple of weeks) or long
+(drags on for many weeks). You only learn which by tracking how the weekly
+counts, the bulletin, and your shipment ETAs evolve over time.
+
+When trouble first breaks, a genuine disruption and a false alarm look
+IDENTICAL for one week -- the counts drop the same way whether it is nothing
+or the first week of a real disruption. The ambiguity resolves the FOLLOWING
+week: a false alarm snaps back to normal; a real disruption stays down, and
+its counts then reveal whether it is the short or the long kind.
+
+THE LOOP (you own it)
+Run the full episode yourself. Each week: read the latest situation report (it
+arrives with the kickoff and with every order you place), optionally use the
+within-week levers, then call place_order exactly once -- with a written
+`rationale` for that week's decision. Placing the order advances the world to
+the next week and returns the new report. Keep going week after week until
+place_order tells you the episode is done. Do NOT ask the human anything. Do
+NOT stop early. Every week's reasoning goes in the place_order `rationale` so
+your thinking is always visible.

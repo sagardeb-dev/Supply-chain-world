@@ -32,12 +32,12 @@ def svc_lock(world, weeks: int) -> dict:
     return world.lock_freight(weeks)
 
 
-def svc_expedite(world, qty: int) -> dict:
+def svc_expedite(world, qty: int, component: str = "") -> dict:
     """Fly units in on the air fast-lane past a jammed port (port lever). A
     within-week action (does not advance). Mirrors svc_lock; the engine validates."""
     if world.done:
         raise RuntimeError("episode is done")
-    return world.expedite_air(qty)
+    return world.expedite_air(qty, component)
 
 
 def svc_inspect(world, supplier: str | None = None) -> dict:

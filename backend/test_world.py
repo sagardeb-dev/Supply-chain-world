@@ -2070,10 +2070,11 @@ def test_base_stock_beats_flat_ladder_under_demand():
     assert bstock < flat
 
 
-def test_prompt_reframes_buffer_and_default_supplier():
-    """The CORE prompt sizes a buffer toward the implied service target, no
-    longer steers against buffers, and does not offer the freight lever it
-    lacks; an omitted supplier defaults to the incumbent instead of raising."""
+def test_prompt_faithful_vs_coached_arms():
+    """The FAITHFUL (default) prompt describes rules only -- no strategy
+    markers, no levers the world lacks; coached=True appends THE PLAYBOOK
+    (advice incl. the 95% service target), still module-gated. An omitted
+    supplier defaults to the incumbent instead of raising."""
     from src.world.registry import CORE
     from src.agent.prompt import build_system_prompt
     w = World(WorldConfig(), registry=CORE); w.reset(7)
@@ -2081,9 +2082,19 @@ def test_prompt_reframes_buffer_and_default_supplier():
     assert "{0, 20, 40}" not in p                        # old qty menu gone
     assert "inventory_position" in p                     # sizing variable described
     assert "do not carry a big buffer" not in p          # anti-buffer steer gone
-    assert "95%" in p                                    # service target stated
     assert "lock_freight(weeks)" not in p                # freight lever stripped (CORE)
     assert "expedite_air(qty)" not in p                  # port lever stripped (CORE)
+    # faithful arm: no advice markers anywhere
+    # ("95% OTIF" is a supplier RULE and stays; "95% of weeks" is advice)
+    for marker in ("THE PLAYBOOK", "95% of weeks", "size your safety buffer",
+                   "order-up-to", "do not lean on spot",
+                   "corridor is in trouble"):
+        assert marker not in p, f"advice leaked into faithful prompt: {marker}"
+    pc = build_system_prompt(w, coached=True)
+    assert pc.startswith(p)                              # coached = faithful + playbook
+    assert "THE PLAYBOOK" in pc and "95%" in pc          # advice present
+    assert "lock_freight before the spike" not in pc     # playbook module-gated (no freight)
+    assert "expedite_air to bridge the gap" not in pc    # (no port)
     # default supplier resolves to the incumbent (qualified here) -> no raise
     class _Run:
         world = w
@@ -2458,7 +2469,8 @@ def test_quality_in_scored_assembly_obs():
     when a defective batch lands, and the leak-guard still holds (no hidden
     quality regime ever surfaces)."""
     from src.world.registry import ASSEMBLY
-    assert [m.id for m in ASSEMBLY] == ["disruption", "supplier", "demand", "quality"]
+    assert [m.id for m in ASSEMBLY] == ["disruption", "supplier", "demand",
+                                        "freight", "port", "quality"]
     prod = structure("earbuds")
 
     found_rework = False
@@ -2481,6 +2493,26 @@ def test_quality_in_scored_assembly_obs():
         if found_rework:
             break
     assert found_rework, "no defective batch landed across 7 seeds (seed unlucky?)"
+
+
+def test_expedite_air_multi_component():
+    """On a multi-component product expedite_air REQUIRES a component name,
+    credits exactly the flown units into THAT component's bin, and bills air."""
+    from src.world.registry import ASSEMBLY
+    w_air, w_base = World(QPS, registry=ASSEMBLY), World(QPS, registry=ASSEMBLY)
+    w_air.reset(8); w_base.reset(8)
+    with pytest.raises(ValueError):
+        w_air.expedite_air(10)                   # component required
+    with pytest.raises(ValueError):
+        w_air.expedite_air(10, "warp_core")      # unknown component
+    w_air.expedite_air(10, "battery")
+    o_air = w_air.step({})[0]
+    o_base = w_base.step({})[0]
+    delta = {c: w_air.books.components[c] - w_base.books.components[c]
+             for c in w_air.books.components}
+    assert delta == {"battery": 10, "chip_std": 0, "chip_pro": 0}
+    assert o_air["cost_breakdown"]["air"] == pytest.approx(10 * QPS.air_unit_cost)
+    assert "air" not in o_base["cost_breakdown"]
 
 
 def test_legacy_quality_untouched():

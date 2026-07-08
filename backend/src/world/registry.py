@@ -149,13 +149,12 @@ CORE: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND)
 # each new factor's rng draws come last and the disruption-only golden holds.
 RICH: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND, FREIGHT, PORT, QUALITY)
 
-# ASSEMBLY: the v2 scored world (Phase 3) -- CORE (disruption, supplier,
-# demand) plus QUALITY, so the assembly world's cost includes per-supplier
-# process quality/rework alongside the all-drift supplier bet. Quality APPENDS
-# after demand (registry order = rng draw order), so CORE's own trajectory is
-# unperturbed by turning quality on. Used for product != "single" runs (the
-# earbuds/assembly agent harness); freight/port stay RICH-only additions.
-ASSEMBLY: tuple[Module, ...] = (DISRUPTION, SUPPLIER, DEMAND, QUALITY)
+# ASSEMBLY: the v2 scored world -- the FULL six-module RICH registry on the
+# multi-component product (disruption, supplier, demand, freight, port,
+# quality). Same tuple as RICH: the assembly task differs by product/flags
+# (earbuds + sup_all_drift + quality_per_supplier), not by which factors run.
+# Used for product != "single" runs (the earbuds/assembly agent harness).
+ASSEMBLY: tuple[Module, ...] = RICH
 
 
 # ponytail: the paid analyst_briefing is deliberately NOT in any module's emit
