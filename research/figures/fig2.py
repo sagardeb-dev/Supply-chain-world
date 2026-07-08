@@ -1,0 +1,121 @@
+# Figure 2: detection uniform vs skill divergent. Reads ONLY from runs files.
+import csv, re, sys
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+ROOT = Path(__file__).resolve().parents[2] / "backend" / "runs" / "ladder-v1"
+GROUPS = {  # frozen seed groups (TRACKER.md); backend uses old labels SINGLE/PORT-TRAP
+    "ISOLATED": [157, 25, 112, 60, 24, 86],
+    "PERSISTENT": [1, 172, 170, 95, 29, 58, 108],
+    "COMPOUND": [21, 143, 99, 44, 94, 154, 85],
+}
+SEED2GROUP = {s: g for g, seeds in GROUPS.items() for s in seeds}
+MODELS = ["sonnet-5", "gpt-5.4", "deepseek-v4-pro"]
+CSVKEY = {"sonnet-5": "anthropic-claude-sonnet-5", "gpt-5.4": "openai-gpt-5.4",
+          "deepseek-v4-pro": "deepseek-deepseek-v4-pro"}
+
+# ---- parse per-seed skill out of skill.md tables ----
+skill = {m: {} for m in MODELS}
+lines = (ROOT / "skill.md").read_text().splitlines()
+section = "orig"
+for ln in lines:
+    if ln.startswith("## deepseek-v4-pro (added"): section = "ds9"
+    elif ln.startswith("## deepseek-v4-pro, 11"): section = "ds11"
+    elif ln.startswith("## sonnet-5, 11"): section = "sn11"
+    elif ln.startswith("## gpt-5.4, 11"): section = "gp11"
+    elif ln.startswith("## 20-seed expansion"): section = "skip"
+    cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+    if len(cells) < 4 or not re.match(r"^\d+$", cells[1]):
+        continue
+    seed = int(cells[1])
+    num = lambda s: float(s.replace("−", "-"))
+    if section == "orig" and len(cells) >= 8:
+        skill["sonnet-5"][seed] = num(cells[5]); skill["gpt-5.4"][seed] = num(cells[7])
+    elif section == "ds9" or section == "ds11":
+        skill["deepseek-v4-pro"][seed] = num(cells[3])
+    elif section == "sn11":
+        skill["sonnet-5"][seed] = num(cells[3])
+    elif section == "gp11":
+        skill["gpt-5.4"][seed] = num(cells[3])
+
+for m in MODELS:
+    assert len(skill[m]) == 20, f"{m}: parsed {len(skill[m])} seeds, want 20"
+
+# ---- cross-validate group means against results.md Table 1 ----
+EXPECT = {  # from research/results.md (script-computed there)
+    "sonnet-5": {"ISOLATED": 0.51, "PERSISTENT": 0.55, "COMPOUND": 0.58},
+    "gpt-5.4": {"ISOLATED": 0.48, "PERSISTENT": 0.61, "COMPOUND": 0.80},
+    "deepseek-v4-pro": {"ISOLATED": -0.42, "PERSISTENT": -1.05, "COMPOUND": 0.72},
+}
+for m in MODELS:
+    for g, seeds in GROUPS.items():
+        mean = sum(skill[m][s] for s in seeds) / len(seeds)
+        assert abs(mean - EXPECT[m][g]) < 0.006, f"{m}/{g}: {mean:.3f} != {EXPECT[m][g]}"
+print("cross-validation vs results.md: OK")
+
+# ---- detection rate from belief_metrics.csv ----
+missed, episodes = {m: 0 for m in MODELS}, {m: 0 for m in MODELS}
+with open(ROOT / "belief_metrics.csv") as f:
+    for row in csv.DictReader(f):
+        for m, key in CSVKEY.items():
+            if row["model"] == key:
+                missed[m] += int(row["n_never_detected"])
+                episodes[m] += int(row["n_episodes"])
+det = {m: (episodes[m] - missed[m]) / episodes[m] for m in MODELS}
+assert all(episodes[m] == 114 for m in MODELS)
+print("detection:", {m: round(det[m], 3) for m in MODELS})
+
+# ---- plot ----
+C = {"sonnet-5": "#C86214", "gpt-5.4": "#2F6DA3", "deepseek-v4-pro": "#4B5563"}
+NAME = {"sonnet-5": "Claude Sonnet 5", "gpt-5.4": "GPT-5.4", "deepseek-v4-pro": "DeepSeek-V4-Pro"}
+plt.rcParams.update({"font.family": "sans-serif", "font.size": 7,
+                     "axes.edgecolor": "#787880", "axes.linewidth": 0.7})
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(5.5, 2.2),
+                               gridspec_kw={"width_ratios": [0.8, 1.6], "wspace": 0.32})
+
+# panel (a): detection rate (uniform)
+xs = range(len(MODELS))
+ax1.bar(xs, [det[m] * 100 for m in MODELS], width=0.55,
+        color=[C[m] for m in MODELS], edgecolor="none")
+for x, m in zip(xs, MODELS):
+    ax1.text(x, det[m] * 100 + 2, f"{det[m]*100:.0f}%", ha="center", fontsize=6.5, color="#333")
+ax1.set_xticks(list(xs)); ax1.set_xticklabels(["Sonnet", "GPT", "DS"], fontsize=6.5)
+ax1.set_ylim(0, 112); ax1.set_ylabel("stress episodes detected (%)", fontsize=6.5)
+ax1.set_title("(a) Detection", fontsize=7.5, loc="left")
+ax1.spines[["top", "right"]].set_visible(False)
+
+# panel (b): slopegraph of group means, faint per-seed dots behind
+order = ["ISOLATED", "PERSISTENT", "COMPOUND"]
+JIT = {"sonnet-5": -0.10, "gpt-5.4": 0.0, "deepseek-v4-pro": 0.10}
+ax2.axhspan(0, 1, color="#000000", alpha=0.045, zorder=0)
+ax2.axhline(0, color="#888", lw=0.7, ls=(0, (4, 3)))
+ax2.axhline(1, color="#7A5FA8", lw=0.7, ls=(0, (4, 3)))
+for m in MODELS:
+    means = []
+    for gi, g in enumerate(order):
+        ys = [skill[m][s] for s in GROUPS[g]]
+        ax2.scatter([gi + JIT[m]] * len(ys), ys, s=8, color=C[m], alpha=0.30,
+                    edgecolors="none", zorder=2)
+        means.append(sum(ys) / len(ys))
+    ax2.plot(range(3), means, color=C[m], lw=1.8, zorder=4,
+             marker="o", ms=4.5, mec="white", mew=0.6)
+    LABY = {"gpt-5.4": 1.45, "deepseek-v4-pro": 0.72, "sonnet-5": -0.30}
+    ly = LABY[m]
+    ax2.plot([2.03, 2.24], [means[-1], ly], color=C[m], lw=0.6, alpha=0.6, zorder=3)
+    ax2.text(2.28, ly, NAME[m], fontsize=6.5, color=C[m], va="center")
+ax2.text(-0.30, 1.0, "oracle = 1", fontsize=5.5, color="#7A5FA8", va="bottom", ha="left")
+ax2.text(-0.30, 0.0, "floor = 0", fontsize=5.5, color="#777", va="top", ha="left")
+ax2.set_xticks(range(3))
+ax2.set_xticklabels(["Isolated", "Persistent", "Compound"], fontsize=6.5)
+ax2.set_xlim(-0.35, 3.3); ax2.set_ylim(-3.1, 2.1)
+ax2.set_yticks([-3, -2, -1, 0, 1, 2])
+ax2.set_ylabel("skill score", fontsize=6.5, labelpad=1)
+ax2.set_title("(b) Skill by stress profile", fontsize=7.5, loc="left")
+ax2.spines[["top", "right"]].set_visible(False)
+
+fig.savefig(Path(__file__).parent / "fig2.pdf", bbox_inches="tight")
+fig.savefig(Path(__file__).parent / "fig2-preview.png", dpi=200, bbox_inches="tight")
+print("written fig2.pdf")

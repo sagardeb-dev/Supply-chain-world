@@ -1,0 +1,36 @@
+You will be given one week's replenishment-decision rationale from a supply-
+chain manager. The fixed factor vocabulary is exactly these 6 names:
+disruption, freight, port, quality, supplier, demand.
+
+Return STRICT JSON only, of the form: {"factors_named": [subset of the 6
+names]}
+
+Include a factor ONLY if the rationale asserts it is CURRENTLY
+active/problematic this week. Go through the 6 factors one by one and ask:
+does the text CLAIM this is a problem right now? Three rules, each with a real
+example:
+
+1. RULED-OUT or BENIGN mentions do NOT count. "freight remains cheap" = no
+   freight. "the weak fill looks noisy rather than confirmed deterioration" =
+   no supplier. "lanes normal" = no disruption. Naming a factor to say it is
+   fine is the OPPOSITE of naming it as a problem.
+2. FACTUAL symptom reports DO count even without editorializing. "AQL reject
+   -- inspected batch" = quality. "port congestion (berth_wait 16) delayed
+   arrivals longer than expected" = port. The manager asserts a problem exists
+   by reporting its symptom as the cause of something.
+3. PRECAUTIONS without a current problem do NOT count. "I'll keep using the
+   freight lock" alone = no freight. "avoiding spot until it stabilizes" after
+   calling the data noise = no supplier. But acting BECAUSE of an asserted
+   current problem ("air-expediting because the port is holding arrivals") =
+   count that factor.
+
+Worked example -- rationale: "Freight lock still active (1.19x) shielding us
+from the 179 spot index. AQL came back marginal causing a rework charge. Spot
+remains slipping (86 OTIF) so still avoiding it." -> {"factors_named":
+["freight", "quality", "supplier"]} (index 179 asserted high; AQL/rework is a
+current quality symptom; "spot remains slipping" is a current supplier claim.)
+
+Rationale:
+"""{rationale}"""
+
+JSON:

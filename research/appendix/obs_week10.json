@@ -1,0 +1,116 @@
+{
+ "week": 10,
+ "inventory": 0,
+ "on_order": 66,
+ "inventory_position": 66,
+ "arrived": 27,
+ "components": {
+  "unit": {
+   "on_hand": 0,
+   "on_order": 66,
+   "inventory_position": 66,
+   "arrived": 27
+  }
+ },
+ "served": {
+  "unit": 27
+ },
+ "pipeline": [
+  {
+   "qty": 23,
+   "route": "suez",
+   "supplier": "spot",
+   "component": "unit",
+   "dispatched_week": 8,
+   "status": "at_sea",
+   "eta": 11
+  },
+  {
+   "qty": 15,
+   "route": "suez",
+   "supplier": "spot",
+   "component": "unit",
+   "dispatched_week": 9,
+   "status": "at_sea",
+   "eta": 12
+  },
+  {
+   "qty": 28,
+   "route": "suez",
+   "supplier": "spot",
+   "component": "unit",
+   "dispatched_week": 10,
+   "status": "at_sea",
+   "eta": 13
+  }
+ ],
+ "cost_breakdown": {
+  "shipping": 80.192,
+  "surcharge": 0.0,
+  "holding": 0.0,
+  "in_transit": 66.0,
+  "stockout": 40.0,
+  "couple": 0.0,
+  "demurrage": 0.0,
+  "rework": 0.0
+ },
+ "contracts": [
+  {
+   "supplier": "spot",
+   "start_week": 0,
+   "end_week": null,
+   "unit_price": 4.0,
+   "otif_floor": 85,
+   "break_fee": 10.0
+  }
+ ],
+ "contract_open": [],
+ "term_menu": [
+  "short",
+  "long",
+  "strict",
+  "lenient"
+ ],
+ "suez_count": 70,
+ "bab_count": 70,
+ "cape_count": 60,
+ "bulletin": "Shipping lanes normal. Suez Canal and Bab-el-Mandeb transits at
+   seasonal levels; Cape routing remains a niche choice.",
+ "suppliers": [
+  {
+   "id": "qualified",
+   "otif": 99,
+   "lead_days": 14,
+   "band": "ontime",
+   "onboard_lead": 0,
+   "unit_premium": 1.0,
+   "unit_delta": 1.0
+  },
+  {
+   "id": "spot",
+   "otif": 98,
+   "lead_days": 14,
+   "band": "ontime",
+   "onboard_lead": 0,
+   "realized_lead_slip": 0.0,
+   "unit_discount": 1.5,
+   "unit_delta": -1.5
+  },
+  {
+   "id": "backup",
+   "otif": 95,
+   "lead_days": 16,
+   "band": "ontime",
+   "onboard_lead": 1,
+   "unit_delta": 0.3
+  }
+ ],
+ "pos_units": 29,
+ "demand_forecast": 28,
+ "freight_index": 109,
+ "freight_outlook": 85,
+ "berth_wait": 0,
+ "wait_outlook": 8,
+ "aql_result": "accept",
+ "realized_fill": 1.0
+}
