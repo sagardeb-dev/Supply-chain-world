@@ -33,7 +33,28 @@
 \maketitle
 
 \begin{abstract}
-[Written last — see draft.md.]
+LLM agents are increasingly evaluated on long-horizon tasks whose state is
+hidden: a demand shift, a failing supplier. The consistent finding is that
+performance degrades as horizons grow, and cost alone cannot say why,
+because an agent may have failed to infer what was happening, or may have
+inferred it correctly and failed to act (the knowing-doing gap). Existing
+measurements cannot separate the two: their reference policies see
+privileged information the agent does not. We introduce BENCHNAME, a
+26-week supply-chain replenishment benchmark built as a factored POMDP with
+six hidden factor processes, designed so that a \emph{fair} reference
+policy is computable: an exact Bayes filter per factor drives a rollout
+policy on the identical observation stream the agent receives. Scoring each
+run between a symptom-blind base-stock floor (0) and this oracle (1) gives
+a skill score, and each week's written rationale gives a detection lag and
+a knowing-doing rate, separating state estimation from control. On twenty
+seeds with controlled stress profiles, Claude Sonnet 5, GPT-5.4, and
+DeepSeek-V4-Pro detect 85--92\% of hidden failures, typically within a week
+of onset; yet the two stronger models recover only 55\% and 64\% of the
+available cost headroom, DeepSeek-V4-Pro falls below the symptom-blind
+floor on 9 of 20 seeds, and where stress persists, 41--49\% of correctly
+diagnosed stress weeks still end in stockout. The expensive step for
+current agents comes after diagnosis: converting a correct stated belief
+into costly action. The benchmark makes that step a measured quantity.
 \end{abstract}
 
 \section{Introduction}
