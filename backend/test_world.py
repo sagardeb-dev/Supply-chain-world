@@ -509,6 +509,16 @@ def test_agent_tools_gating():
     assert "Order placed" in out
     assert any(k == "place_order" for _, k in run.events)
 
+    # a tool call AFTER the episode ends returns text, never raises (gemini
+    # 3.1 does this; a stray call must not kill a completed 26-week trace)
+    while not run.world.done:
+        run.world.step({"order_qty": 20, "route": "suez", "supplier": "qualified"})
+    out = place_order.invoke({"rationale": "t", "qty": 20,
+                              "supplier": "qualified", "route": "suez"})
+    assert "EPISODE DONE" in out
+    out = buy_briefing.invoke({})
+    assert "EPISODE DONE" in out
+
 
 def test_resume_roundtrip(tmp_path, monkeypatch):
     """An AgentRun's World survives save/load rng-faithfully: the loaded

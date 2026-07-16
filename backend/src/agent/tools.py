@@ -193,4 +193,17 @@ def make_tools(run):
     # 2-factor/CORE world has no incoming quality to inspect.
     if any(m.id == "quality" for m in run.world.registry):
         tools.append(inspect_batch)
+
+    # A tool call after week 26 must not kill a completed episode (gemini does
+    # this); answer it with text instead of letting service raise RuntimeError.
+    def _episode_guard(fn):
+        def guarded(*a, **k):
+            if run.world.done:
+                return ("EPISODE DONE. The 26-week run is over; "
+                        "no further actions are possible.")
+            return fn(*a, **k)
+        return guarded
+
+    for t in tools:
+        t.func = _episode_guard(t.func)
     return tools

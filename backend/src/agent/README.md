@@ -5,7 +5,7 @@ Drives a `World` through an LLM. `make_tools` (`tools.py`) exposes a
 modules and product the world was built with, not a fixed list — builds a
 [`deepagents`](https://github.com/langchain-ai/deepagents) agent on an OpenRouter
 model, runs a full 26-week episode, and records every decision. This is what
-produced the traces in [`../../../run/`](../../../run).
+produces the benchmark traces in `../../runs/`.
 
 ## Files
 

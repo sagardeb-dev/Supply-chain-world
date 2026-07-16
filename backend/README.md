@@ -38,7 +38,7 @@ registry/product actually has the module they act on (registry/product-gated
 tools — see [`src/agent/README.md`](src/agent/README.md)). Builds a
 `deepagents` agent on an OpenRouter model, and runs an episode while recording
 every decision. `play_agent.py` is the headless entry point used to produce
-the traces in [`../run/`](../run) and `runs/`.
+the traces in `runs/`.
 
 ## `src/api/` — the server
 
@@ -51,3 +51,23 @@ and serves the static `frontend/` from the same origin (no Node build step). See
 One regression file (`test_world.py`) — ~126 fast tests in a few seconds. It
 pins the factored dynamics and cost arithmetic, the registry draw order, and the
 base-stock / fixed-policy baselines that the `/benchmark` endpoint serves.
+
+## Reproducing the benchmark — `bench.py`
+
+The whole evaluation pipeline is one CLI (config in `bench_config.py`:
+seed groups, model list, oracle rep count). Every step skips work already on
+disk, so each command is safe to re-run.
+
+```bash
+uv run python bench.py run      # fill missing (model, seed) traces (LLM calls, sequential)
+uv run python bench.py oracle   # 20-rep Bayes-oracle refs -> runs/<exp>/oracle_refs.csv (CPU, deterministic)
+uv run python bench.py score    # skill = (basestock-llm)/(basestock-oracle) -> skill_scores.csv
+uv run python bench.py grade    # belief grading (pass-through to runs/grade_beliefs.py)
+uv run python bench.py report   # runs/<exp>/report.md + regenerated manifest.json
+```
+
+`basestock` costs come from `sweep/results.csv` (regenerate with
+`uv run python -m sweep.run_sweep`). `runs/<exp>/oracle_refs.csv` is committed
+so scoring works without recomputing the oracle; `run_oracle` is deterministic
+per (seed, k), so any row can be verified by rerunning
+`bench.py oracle --seeds N --out /tmp/check.csv` and diffing.

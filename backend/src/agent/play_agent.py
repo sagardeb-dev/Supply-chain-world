@@ -78,7 +78,13 @@ def run_agent(seed, model, mode, semantics, rich, product="single",
             emit(f"\n{'=' * 26} {head} {'=' * 26}")
             in_week = True
 
-    for update in agent.stream(kickoff, config, stream_mode="updates"):
+    # An empty model reply (deepseek's reasoning sometimes burns the completion
+    # and returns no tool call) ends the stream mid-episode. Nudge the same
+    # thread (MemorySaver keeps the history) instead of losing the run; only
+    # fires on episodes that would otherwise die incomplete.
+    turn, nudges, last_nudge_week = kickoff, 0, -1
+    while True:
+      for update in agent.stream(turn, config, stream_mode="updates"):
         if not isinstance(update, dict):
             continue
         for _node, delta in update.items():
@@ -119,6 +125,18 @@ def run_agent(seed, model, mode, semantics, rich, product="single",
                          + ("  ** EPISODE DONE **" if p["done"] else ""))
                     emit(f"  SITUATION  {_obs_summary(p['obs'])}")
                     emit(f"  hidden: {_fmt_hidden(rec)}")
+      # keep nudging while each nudge buys progress (some models stall every
+      # couple of weeks); stop when one buys nothing, or at a safety cap.
+      if run.world.done or run.world.week == last_nudge_week or nudges >= 40:
+          break
+      last_nudge_week = run.world.week
+      nudges += 1
+      in_week = False
+      emit(f"\n[harness] model went silent mid-episode; nudge {nudges}")
+      turn = {"messages": [{"role": "user", "content":
+          f"You stopped without finishing. It is week {run.world.week} and the "
+          "episode is not over. Continue: decide this week and call "
+          "place_order (with your rationale)."}]}
     return run.world, "\n".join(log)
 
 

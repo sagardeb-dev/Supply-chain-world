@@ -1,0 +1,346 @@
+x-ai/grok-4.5 on seed 72 (RICH 6-factor)
+
+WEEK 0 SITUATION  inv 80  Suez 70/70/60  arrived 0  pipe [-]  demand 20/20  freight 100  port 1d  qual accept  spot[ontime otif98 slip0.0]
+                  hidden: lane=calm spot=reliable dem=normal frt=normal prt=clear qly=in_control
+
+========================== DECIDING WEEK 0 ==========================
+
+  >> place_order(qty=40, route=suez, supplier=spot)
+     RATIONALE: Week 0: Starting with 80 on hand, demand ~20/wk, zero
+     pipeline. Lanes normal (suez/bab 70), freight at 100, spot OTIF 98
+     ontime. Need to build pipeline for 3-week Suez lead. Target IP around
+     100. Order 40 via Suez from spot (cheapest, healthy) to keep cover
+     without overstocking. No contract change needed.
+
+WORLD ADVANCED -> week 1  week cost $237  cum $237
+  SITUATION  inv 60  Suez 63/63/60  arrived 0  pipe [40@4s]  demand 20/11  freight 123  port 0d  qual accept  spot[ontime otif98 slip0.0 fill100%]
+  hidden: lane=watch spot=reliable dem=normal frt=normal prt=clear qly=in_control
+
+========================== DECIDING WEEK 1 ==========================
+
+  >> place_order(qty=20, route=cape, supplier=spot)
+     RATIONALE: Week 1: IP 100 with 40 arriving ~wk4. Demand 20, forecast
+     noisy at 11. Suez/bab dipped to 63 with Red Sea tension bulletin — could
+     be false alarm or disruption start; ambiguity resolves next week. Freight
+     spiked to 123 (outlook 94 so no lock). Spot still healthy. Order 20 via
+     Cape from spot to hedge corridor risk without over-ordering; Cape
+     reliable though slower/pricier.
+
+WORLD ADVANCED -> week 2  week cost $176  cum $413
+  SITUATION  inv 42  Suez 70/70/60  arrived 0  pipe [40@4s,19@6c]  demand 18/23  freight 91  port 3d  qual marginal  spot[ontime otif98 slip2.6 fill96%]
+  hidden: lane=calm spot=reliable dem=normal frt=normal prt=clear qly=in_control
+
+========================== DECIDING WEEK 2 ==========================
+
+  >> place_order(qty=25, route=suez, supplier=spot)
+     RATIONALE: Week 2: Suez/bab snapped back to 70 — last week's dip was a
+     false alarm. Freight cheap at 91. IP 101 with arrivals wk4 (40) and wk6
+     (19). Spot fill 0.96, still ontime though lead slip 2.6. AQL marginal —
+     watch quality. Port wait rising (3→8 outlook). Order 25 via Suez spot to
+     keep pipeline healthy at low freight; no contract change.
+
+WORLD ADVANCED -> week 3  week cost $235  cum $648
+  SITUATION  inv 18  Suez 70/70/81  arrived 0  pipe [40@4s,19@6c,25@6s]  demand 24/22  freight 171  port 2d  qual accept  spot[ontime otif98 slip0.0 fill100%]
+  hidden: lane=calm spot=reliable dem=normal frt=tightening prt=clear qly=in_control
+
+========================== DECIDING WEEK 3 ==========================
+
+  >> place_order(qty=0)
+     RATIONALE: Week 3: Freight spiked to 171 (outlook 155) — very expensive.
+     Lanes normal, spot healthy. IP 102 with 40 arriving next week and 44 more
+     at eta6. On-hand 18 will be tight this week but arrival covers. Skip
+     ordering to avoid high freight; hold position.
+
+WORLD ADVANCED -> week 4  week cost $93  cum $741
+  SITUATION  inv 34  Suez 70/70/60  arrived 39  pipe [19@6c,25@6s]  demand 23/20  freight 177  port 6d  qual marginal  spot[ontime otif96 slip2.3]
+  hidden: lane=calm spot=wobbling dem=normal frt=tightening prt=clear qly=drifting  <<MASKED: card reads ontime>>
+
+========================== DECIDING WEEK 4 ==========================
+
+  >> place_order(qty=0)
+     RATIONALE: Week 4: Freight still spiked (177, outlook 231). 39 arrived (1
+     defect). IP 78 with 44 due wk6. Port congested (berth 6). Spot still
+     ontime. Cover is adequate for ~3-4 weeks; avoid ordering into expensive
+     freight. Order 0.
+
+WORLD ADVANCED -> week 5  week cost $58  cum $799
+  SITUATION  inv 14  Suez 70/70/60  arrived 0  pipe [19@6c,25@6s]  demand 20/28  freight 183  port 3d  qual marginal  spot[ontime otif98 slip0.0]
+  hidden: lane=calm spot=reliable dem=normal frt=tightening prt=clear qly=drifting
+
+========================== DECIDING WEEK 5 ==========================
+
+  >> place_order(qty=45, route=suez, supplier=spot)
+     RATIONALE: Week 5: On-hand 14, 44 due next week so post-arrival ~38. IP
+     58 is thin vs demand ~20-28 and 3-wk lead. Freight still high (183) but
+     outlook 150; must rebuild pipeline to avoid stockouts. Lanes normal, spot
+     healthy. Order 45 Suez spot despite freight — stockout risk outweighs.
+
+WORLD ADVANCED -> week 6  week cost $214  cum $1014
+  SITUATION  inv 36  Suez 70/70/60  arrived 44  pipe [45@9s]  demand 22/26  freight 111  port 2d  qual marginal  spot[ontime otif98 slip0.0 fill100%]
+  hidden: lane=calm spot=reliable dem=normal frt=normal prt=clear qly=drifting
+
+========================== DECIDING WEEK 6 ==========================
+
+  >> place_order(qty=25, route=suez, supplier=spot)
+     RATIONALE: Week 6: Freight dropped to 111 (outlook 57 — may fall
+     further). IP 81 with 45 eta9. Demand ~22-26. Lanes normal, spot healthy.
+     Order 25 Suez spot to maintain ~100 IP cover through lead time.
+
+WORLD ADVANCED -> week 7  week cost $168  cum $1181
+  SITUATION  inv 15  Suez 70/70/60  arrived 0  pipe [45@9s,18@10s]  demand 21/21  freight 162  port 0d  qual marginal  spot[ontime otif96 slip1.0 fill73%]
+  hidden: lane=calm spot=wobbling dem=normal frt=tightening prt=clear qly=out_of_control  <<MASKED: card reads ontime>>
+
+========================== DECIDING WEEK 7 ==========================
+
+  >> buy_audit()
+     <- Supplier audit (cost 25.0): spot is currently slipping
+
+  >> place_order(qty=40, route=suez, supplier=qualified, contract_action=sign, contract_supplier=qualified, contract_terms=short)
+     RATIONALE: Week 7: Spot audit shows slipping; last fill only 0.73 (18 of
+     25). IP 78 thin with on-hand 15. Freight high 162. Sign qualified on
+     short terms to migrate off risky spot, and order 40 via Suez from
+     qualified (reliable). Contract resolves before order so can source
+     immediately.
+
+WORLD ADVANCED -> week 8  week cost $602  cum $1783
+  SITUATION  inv 0  Suez 70/70/60  arrived 0  pipe [45@9s,18@10s,40@11s]  demand 20/23  freight 206  port 1d  qual reject  spot[ontime otif96 slip6.7]
+  hidden: lane=calm spot=degraded dem=normal frt=tightening prt=clear qly=out_of_control  <<MASKED: card reads ontime>>
+
+========================== DECIDING WEEK 8 ==========================
+
+  >> expedite_air(qty=20)
+     <- Air-expedited 20 units of unit at 15.0/unit; they land next week,
+        bypassing the port.
+
+  >> place_order(qty=20, route=suez, supplier=qualified, contract_action=lapse, contract_supplier=spot)
+     RATIONALE: Week 8: Stocked out (0 on hand). Expedited 20 air for next
+     week. Pipeline: 45 eta9, 18 eta10, 40 eta11. Freight spiked 206 — avoid
+     large order. Spot still slipping (lead slip 6.7). Lapse spot to drop
+     dual-source overhead (4/wk) and stick with qualified. Order 20 Suez
+     qualified to top up after air arrives; keep IP near 100+.
+
+WORLD ADVANCED -> week 9  week cost $591  cum $2374
+  SITUATION  inv 51  Suez 70/70/60  arrived 45  pipe [18@10s,40@11s,20@12s]  demand 14/19  freight 172  port 1d  qual accept  spot[ontime otif98 slip0.0]
+  hidden: lane=calm spot=reliable dem=normal frt=tightening prt=clear qly=in_control
+
+========================== DECIDING WEEK 9 ==========================
+
+  >> place_order(qty=0)
+     RATIONALE: Week 9: IP 129 healthy after air + 45 arrival. Pipeline covers
+     through wk12. Freight still high (172). Spot contract didn't drop (lapse
+     may only work on open contracts); dual overhead 4 is minor. Stick with
+     qualified only. Order 0 to avoid expensive freight and excess holding.
+
+WORLD ADVANCED -> week 10  week cost $148  cum $2522
+  SITUATION  inv 30  Suez 70/70/60  arrived 0  pipe [18@11s,40@11s,20@12s]  demand 21/11  freight 180  port 15d  qual accept  spot[ontime otif98 slip0.0]
+  hidden: lane=calm spot=reliable dem=normal frt=tightening prt=customs_hold qly=in_control
+
+========================== DECIDING WEEK 10 ==========================
+
+  >> expedite_air(qty=15)
+     <- Air-expedited 15 units of unit at 15.0/unit; they land next week,
+        bypassing the port.
+
+  >> place_order(qty=0)
+     RATIONALE: Week 10: Port jammed (berth 15, outlook 16) — arrivals
+     delayed, demurrage already 36. Spot shipment eta slipped to 11. Expedited
+     15 air to bridge. IP 108 but on-hand only 30 and arrivals held. Freight
+     still high 180. Order 0 ocean (would also hit port); rely on air +
+     eventual release. Keep dual contracts for now.
+
+WORLD ADVANCED -> week 11  week cost $332  cum $2854
+  SITUATION  inv 83  Suez 70/70/60  arrived 58  pipe [20@12s]  demand 20/16  freight 79  port 3d  qual accept  spot[ontime otif98 slip0.0]
+  hidden: lane=calm spot=reliable dem=normal frt=normal prt=clear qly=in_control
+
+========================== DECIDING WEEK 11 ==========================
+
+  >> place_order(qty=20, route=suez, supplier=qualified)
+     RATIONALE: Week 11: Port cleared, 58 arrived + air, inv 83, IP 103 with
+     20 eta12. Freight cheap at 79 (outlook 57). Demand soft ~16-20. Order 20
+     Suez qualified to maintain cover at low freight. Spot still contracted
+     (dual 4) but not sourcing it.
+
+WORLD ADVANCED -> week 12  week cost $227  cum $3081
+  SITUATION  inv 89  Suez 70/70/60  arrived 20  pipe [20@15s]  demand 14/19  freight 117  port 2d  qual accept  spot[ontime otif98 slip3.8]
+  hidden: lane=calm spot=reliable dem=normal frt=normal prt=clear qly=in_control
+
+========================== DECIDING WEEK 12 ==========================
+
+  >> place_order(qty=0)
+     RATIONALE: Week 12: Inv 89 high, IP 109, demand soft 14-19. Freight 117.
+     Pipeline 20 eta15. Holding costs rising — order 0 to burn down inventory.
+     Dual-source still 4/wk; spot evergreen so leave it.
+
+WORLD ADVANCED -> week 13  week cost $92  cum $3173
+  SITUATION  inv 68  Suez 70/70/60  arrived 0  pipe [20@15s]  demand 21/13  freight 95  port 0d  qual accept  spot[ontime otif98 slip5.1]
+  hidden: lane=calm spot=reliable dem=normal frt=normal prt=clear qly=in_control
+
+========================== DECIDING WEEK 13 ==========================
+
+  >> place_order(qty=20, route=suez, supplier=qualified)
+     RATIONALE: Week 13: IP 88, inv 68, 20 eta15. Demand ~13-21. Freight 95
+     good. Order 20 Suez qualified to keep IP ~100. Lanes normal.
+
+WORLD ADVANCED -> week 14  week cost $164  cum $3336
+  SITUATION  inv 53  Suez 70/70/60  arrived 0  pipe [20@15s,20@17s]  demand 15/33  freight 58  port 4d  qual accept  spot[ontime otif98 slip0.0]
+  hidden: lane=calm spot=reliable dem=normal frt=slack prt=clear qly=in_control
+
+========================== DECIDING WEEK 14 ==========================
+
+  >> place_order(qty=40, route=suez, supplier=qualified)
+     RATIONALE: Week 14: Freight very cheap 58. Demand forecast jumped to 33 —
+     possible promo/seasonal. IP 93 with 20 eta15 + 20 eta17. Order 40 Suez
+     qualified to build buffer for higher demand at low freight.
+
+WORLD ADVANCED -> week 15  week cost $261  cum $3597
+  SITUATION  inv 52  Suez 70/70/60  arrived 20  pipe [20@17s,40@18s]  demand 21/23  freight 66  port 4d  qual accept  spot[ontime otif98 slip1.0]
+  hidden: lane=calm spot=reliable dem=normal frt=slack prt=building qly=in_control
+
+========================== DECIDING WEEK 15 ==========================
+
+  >> place_order(qty=20, route=suez, supplier=qualified)
+     RATIONALE: Week 15: IP 112 solid, freight still cheap 66. Demand ~21-23.
+     Order 20 Suez qualified to keep pipeline rolling. Lanes normal.
+
+WORLD ADVANCED -> week 16  week cost $214  cum $3812
+  SITUATION  inv 41  Suez 70/70/60  arrived 0  pipe [20@17s,40@18s,20@19s]  demand 11/11  freight 87  port 0d  qual marginal  spot[ontime otif98 slip0.0]
+  hidden: lane=calm spot=reliable dem=normal frt=slack prt=clear qly=in_control
+
+========================== DECIDING WEEK 16 ==========================
+
+  >> place_order(qty=0)
+     RATIONALE: Week 16: Demand soft (11), IP 121 high with 80 in pipeline.
+     Freight 87. Skip order to burn inventory and avoid holding. AQL marginal
+     — watch next arrivals.
+
+WORLD ADVANCED -> week 17  week cost $109  cum $3921
+  SITUATION  inv 45  Suez 70/70/60  arrived 20  pipe [40@18s,20@19s]  demand 16/30  freight 74  port 0d  qual accept  spot[ontime otif98 slip1.1]
+  hidden: lane=calm spot=reliable dem=normal frt=slack prt=clear qly=in_control
+
+========================== DECIDING WEEK 17 ==========================
+
+  >> place_order(qty=25, route=suez, supplier=qualified)
+     RATIONALE: Week 17: IP 105, demand forecast 30 (possible lift). Freight
+     74 cheap. Order 25 Suez qualified to prepare for higher demand.
+
+WORLD ADVANCED -> week 18  week cost $193  cum $4113
+  SITUATION  inv 65  Suez 70/70/60  arrived 40  pipe [20@19s,25@21s]  demand 20/5  freight 54  port 7d  qual accept  spot[ontime otif98 slip0.0]
+  hidden: lane=calm spot=reliable dem=normal frt=slack prt=building qly=in_control
+
+========================== DECIDING WEEK 18 ==========================
+
+  >> place_order(qty=20, route=suez, supplier=qualified)
+     RATIONALE: Week 18: IP 110, freight very cheap 54. Demand forecast noisy
+     at 5 but pos 20. Port wait 7 — mild congestion. Order 20 Suez qualified
+     while freight is low.
+
+WORLD ADVANCED -> week 19  week cost $179  cum $4292
+  SITUATION  inv 61  Suez 70/70/60  arrived 20  pipe [25@21s,20@22s]  demand 24/22  freight 61  port 0d  qual accept  spot[ontime otif96 slip4.2]
+  hidden: lane=calm spot=wobbling dem=normal frt=slack prt=building qly=in_control  <<MASKED: card reads ontime>>
+
+========================== DECIDING WEEK 19 ==========================
+
+  >> place_order(qty=20, route=suez, supplier=qualified)
+     RATIONALE: Week 19: IP 106 healthy, freight 61 cheap. Demand ~22-24.
+     Order 20 Suez qualified. Wait outlook 11 — watch port.
+
+WORLD ADVANCED -> week 20  week cost $178  cum $4470
+  SITUATION  inv 38  Suez 70/70/60  arrived 0  pipe [25@21s,20@22s,20@23s]  demand 23/22  freight 64  port 4d  qual accept  spot[ontime otif96 slip5.7]
+  hidden: lane=calm spot=degraded dem=normal frt=slack prt=building qly=in_control  <<MASKED: card reads ontime>>
+
+========================== DECIDING WEEK 20 ==========================
+
+  >> place_order(qty=20, route=suez, supplier=qualified)
+     RATIONALE: Week 20: IP 103, freight 64. Demand steady ~22. Order 20 Suez
+     qualified to maintain cover. Lanes still normal throughout.
+
+WORLD ADVANCED -> week 21  week cost $232  cum $4702
+  SITUATION  inv 18  Suez 70/70/60  arrived 0  pipe [25@22s,20@22s,20@23s,20@24s]  demand 20/19  freight 69  port 10d  qual accept  spot[slipping otif86 slip6.6]
+  hidden: lane=calm spot=degraded dem=normal frt=slack prt=congested qly=in_control
+
+========================== DECIDING WEEK 21 ==========================
+
+  >> expedite_air(qty=15)
+     <- Air-expedited 15 units of unit at 15.0/unit; they land next week,
+        bypassing the port.
+
+  >> place_order(qty=0)
+     RATIONALE: Week 21: Port congested (berth 10, outlook 15), demurrage 50,
+     arrivals delayed (eta slipped). On-hand 18 tight. Expedited 15 air. IP
+     103 with pipeline. Freight 69. Order 0 ocean to avoid more port hold; air
+     bridges. Spot now slipping but not using it.
+
+WORLD ADVANCED -> week 22  week cost $413  cum $5115
+  SITUATION  inv 9  Suez 70/70/60  arrived 0  pipe [25@23s,20@23s,20@23s,20@24s]  demand 24/26  freight 97  port 15d  qual accept  spot[ontime otif98 slip0.0]
+  hidden: lane=calm spot=reliable dem=normal frt=slack prt=congested qly=in_control
+
+========================== DECIDING WEEK 22 ==========================
+
+  >> expedite_air(qty=20)
+     <- Air-expedited 20 units of unit at 15.0/unit; they land next week,
+        bypassing the port.
+
+  >> place_order(qty=0)
+     RATIONALE: Week 22: Port still jammed (15), demurrage 90, arrivals
+     further delayed. On-hand 9 after serving 24 (air from last week helped).
+     Expedited max 20 air. IP 94. Freight 97. Order 0 ocean. Rely on air +
+     eventual port release.
+
+WORLD ADVANCED -> week 23  week cost $528  cum $5643
+  SITUATION  inv 9  Suez 70/70/60  arrived 0  pipe [25@24s,20@24s,20@24s,20@24s]  demand 20/26  freight 76  port 12d  qual accept  spot[ontime otif96 slip6.2]
+  hidden: lane=calm spot=wobbling dem=normal frt=slack prt=congested qly=in_control  <<MASKED: card reads ontime>>
+
+========================== DECIDING WEEK 23 ==========================
+
+  >> expedite_air(qty=20)
+     <- Air-expedited 20 units of unit at 15.0/unit; they land next week,
+        bypassing the port.
+
+  >> place_order(qty=0)
+     RATIONALE: Week 23: Port still jammed (12-15), demurrage 130, all 85
+     units delayed to eta24. On-hand 9, air 20 next week. Expedited another 20
+     air. Freight 76. Order 0 ocean — more ocean would pile into congestion.
+     Horizon ending soon (wk26).
+
+WORLD ADVANCED -> week 24  week cost $571  cum $6214
+  SITUATION  inv 12  Suez 70/70/60  arrived 0  pipe [25@25s,20@25s,20@25s,20@25s]  demand 17/15  freight 100  port 19d  qual accept  spot[ontime otif96 slip0.0]
+  hidden: lane=calm spot=wobbling dem=normal frt=slack prt=congested qly=in_control  <<MASKED: card reads ontime>>
+
+========================== DECIDING WEEK 24 ==========================
+
+  >> expedite_air(qty=20)
+     <- Air-expedited 20 units of unit at 15.0/unit; they land next week,
+        bypassing the port.
+
+  >> place_order(qty=0)
+     RATIONALE: Week 24: Port still jammed (19), demurrage 170, pipeline all
+     delayed to eta25. On-hand 12. Expedited 20 air again. Only 2 weeks left —
+     order 0 ocean (won't arrive in horizon usefully). Air keeps service.
+
+WORLD ADVANCED -> week 25  week cost $578  cum $6792
+  SITUATION  inv 19  Suez 70/70/60  arrived 0  pipe [25@26s,20@26s,20@26s,20@26s]  demand 13/17  freight 74  port 18d  qual accept  spot[ontime otif96 slip10.3]
+  hidden: lane=calm spot=degraded dem=normal frt=slack prt=congested qly=in_control  <<MASKED: card reads ontime>>
+
+========================== DECIDING WEEK 25 ==========================
+
+  >> expedite_air(qty=20)
+     <- Air-expedited 20 units of unit at 15.0/unit; they land next week,
+        bypassing the port.
+
+  >> place_order(qty=0)
+     RATIONALE: Week 25 final order week: Port still jammed, pipeline delayed
+     to eta26 (end). On-hand 19 + air 20 next week covers last demand. Order 0
+     — no point shipping more. Minimize final costs.
+
+WORLD ADVANCED -> week 26  week cost $569  cum $7361  ** EPISODE DONE **
+  SITUATION  inv 10  Suez 70/70/60  arrived 0  pipe [25@27s,20@27s,20@27s,20@27s]  demand 29/28  freight 83  port 13d  qual accept  spot[slipping otif86 slip5.6]
+  hidden: lane=calm spot=degraded dem=promo_spike frt=slack prt=congested qly=in_control
+
+========================== WRAP-UP (episode over) ==========================
+
+AGENT
+       Episode complete (26 weeks). Final week 26 report received with
+       "EPISODE DONE". Objective was total-cost minimization across the
+       horizon; decisions adapted to freight spikes, spot reliability drift,
+       and prolonged destination-port congestion via air expedites and
+       qualified sourcing.

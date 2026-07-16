@@ -43,7 +43,7 @@ if grep -n "1\.85" "$TEX"; then
 fi
 
 echo "== 6. Em-dash density =="
-D=$(grep -o '—' "$TEX" | wc -l); W=$(wc -w < "$TEX")
+D=$(( $(grep -o '—' "$TEX" | wc -l) + $(grep -o -- '---' "$TEX" | wc -l) )); W=$(wc -w < "$TEX")
 echo "info: $D em dashes / $W words $( [ "$D" -gt $((W/300+3)) ] && echo '(high — thin them out)' )"
 
 [ $FAIL -eq 0 ] && echo "== ALL HARD CHECKS PASSED ==" || echo "== FAILURES ABOVE =="

@@ -5,3 +5,16 @@ backend/.env
 .claude/
 .superpowers/
 docs/
+# working notes: no mds in the public repo except READMEs
+*.md
+!README.md
+
+# submission artifacts & one-off scripts — local only
+*.tar.gz
+research/make_arxiv.sh
+research/figures/*.html
+
+# latex build artifacts
+research/paper.log
+research/paper.synctex.gz
+research/paper.aux
