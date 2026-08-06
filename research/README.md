@@ -65,16 +65,16 @@ below the no-signal floor on 9 of 20 seeds, and every model's knowing-doing
 rate roughly doubles on PERSISTENT seeds (0.41–0.49) relative to ISOLATED seeds.
 The gap between seeing a problem and acting on it, not the seeing, is what
 separates models — and it widens exactly where the world punishes the
-intuitive response. Trace excerpts in `case-studies.md` show the mechanism:
+intuitive response. Trace excerpts (archived in `archive/case-studies.md`) show the mechanism:
 one model freezes orders while narrating the blockage that will starve it;
 another buys its way into fees against a two-week disruption it had itself
 called short.
 
 ## Files
 
-- `draft.md`, `paper.tex` — the paper (workshop preprint, non-archival target).
+- `paper.tex` — the paper (workshop preprint, non-archival target).
 - `results.md` — final tables, with provenance for every number.
-- `case-studies.md` — verified trace excerpts and per-seed event timelines.
+- `archive/` — superseded drafts, plans, and notes (local-only, gitignored).
 - `WRITING.md` — prose rules for this directory.
 - `CLAUDE.md` — ground rules for AI-assisted work here, including the
   verify-against-traces requirement.

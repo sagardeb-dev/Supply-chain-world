@@ -2,12 +2,19 @@
 # secrets — never commit
 .env
 backend/.env
-.claude/
+.claude/*
+!.claude/workflows/
+!.claude/skills/
 .superpowers/
 docs/
-# working notes: no mds in the public repo except READMEs
+# scratch mds stay local; ledgers and docs that provenance depends on are
+# tracked (D13, DEFECTS.md: a clone must carry the claim map + defect ledger)
 *.md
 !README.md
+!CLAUDE.md
+!research/*.md
+!backend/runs/TRACKER.md
+!backend/runs/ladder-v1/*.md
 
 # submission artifacts & one-off scripts — local only
 *.tar.gz

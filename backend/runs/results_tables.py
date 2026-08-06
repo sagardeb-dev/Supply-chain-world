@@ -60,18 +60,26 @@ for (m, s), rws in cells.items():
     d = det.setdefault(m, {"eps": 0, "miss": 0, "lags": [],
                            "kdr": {}, "conf": {}})
     g = C.group_of(s)
+    last_week = weeks[-1]
     for f in FACTORS:
         prev = False
         for i, wk in enumerate(weeks):
             cur = f in stressed[wk]
             if cur and not prev:
+                # DEFECT FIX 2026-07-30 (D2b): a final-week onset has no
+                # rationale ever -- undetectable by construction, excluded.
+                if wk >= last_week:
+                    prev = cur
+                    continue
                 d["eps"] += 1
                 dw = next((w2 for w2 in weeks if w2 >= wk and f in named[w2]), None)
                 if dw is None: d["miss"] += 1
                 else: d["lags"].append(dw - wk)
             prev = cur
     for wk in weeks:
-        if not stressed[wk]:
+        # DEFECT FIX 2026-07-30 (D2a): the final week has no rationale, so its
+        # stress weeks are unknowable -- excluded from KD/confound pools.
+        if wk >= last_week or not stressed[wk]:
             continue
         diag = bool(named[wk] & stressed[wk])
         k = d["kdr"].setdefault(g, {"dw": 0, "dso": 0, "uw": 0, "uso": 0})

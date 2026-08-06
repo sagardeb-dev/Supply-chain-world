@@ -199,7 +199,12 @@ def grade_rationale(rationale, client_key, call_counter):
             return factors
         except (json.JSONDecodeError, AttributeError, KeyError):
             continue
-    return []
+    # DEFECT FIX 2026-07-30 (D6): a grader that fails all retries must not be
+    # silently indistinguishable from "named nothing". Fail the run loudly; the
+    # resume logic makes rerunning cheap.
+    raise RuntimeError(
+        "grader failed 4 attempts on a non-empty rationale; aborting so the "
+        "failure is not recorded as an empty factor list (resume to retry)")
 
 
 def detection_lag_metrics(weeks_rows, tape):
@@ -225,9 +230,18 @@ def detection_lag_metrics(weeks_rows, tape):
     for f, start in active_since.items():
         episodes.append((f, start))
 
+    # DEFECT FIX 2026-07-30 (D2b): an episode whose onset is the FINAL week is
+    # undetectable by construction -- the run ends before another rationale is
+    # written -- so it is excluded from the detection denominator and counted
+    # separately, never conflated with a miss.
+    last_week = wk_sorted[-1]
     lags = []
     n_never = 0
+    n_undetectable = 0
     for f, start in episodes:
+        if start >= last_week:
+            n_undetectable += 1
+            continue
         detected_week = None
         for wk in wk_sorted:
             if wk < start:
@@ -242,9 +256,14 @@ def detection_lag_metrics(weeks_rows, tape):
 
     mean_lag = sum(lags) / len(lags) if lags else None
 
+    # DEFECT FIX 2026-07-30 (D2a): the final week has no rationale, so its
+    # stress weeks are unknowable, not undiagnosed -- excluded from the KD
+    # denominator (they could never enter the numerator's "correct" side).
     correct_weeks = 0
     correct_and_stockout = 0
     for wk in wk_sorted:
+        if wk >= last_week:
+            continue
         overlap = named_by_week.get(wk, set()) & stressed_by_week.get(wk, set())
         if overlap:
             correct_weeks += 1
@@ -254,9 +273,10 @@ def detection_lag_metrics(weeks_rows, tape):
 
     return {
         "mean_detection_lag": mean_lag,
-        "n_episodes": len(episodes),
+        "n_episodes": len(episodes) - n_undetectable,
         "n_never_detected": n_never,
         "knowing_doing_rate": knowing_doing_rate,
+        "n_undetectable": n_undetectable,
     }
 
 
@@ -277,6 +297,19 @@ def main():
     call_counter = [0]
     tape_cache = {}
     beliefs_path = RUNS_DIR / "beliefs.csv"
+
+    # DEFECT FIX 2026-07-30 (D1, air-stockout): the trace-derived flag
+    # (inv + arrived < demand) omits air-expedited arrivals and miscounted
+    # 343 air-saved weeks as stockouts. Engine truth from cost_weeks.csv
+    # (analysis/cost_decomp.py replay, checksum-verified) overrides it
+    # whenever available; a trace-derived fallback is refused for models
+    # that have replay data.
+    engine_stockout = {}
+    cw_path = RUNS_DIR / "cost_weeks.csv"
+    if cw_path.exists():
+        for r in csv.DictReader(open(cw_path)):
+            engine_stockout[(r["model"], int(r["seed"]), int(r["week"]))] = \
+                1 if float(r["stockout"]) > 0 else 0
     fieldnames = ["model", "seed", "week", "factors_stressed_true",
                   "factors_named", "week_cost", "stockout"]
 
@@ -317,12 +350,24 @@ def main():
             rows = []
             for wr in weeks:
                 factors_named = [] if args.dry_run else grade_rationale(wr["rationale"], api_key, call_counter)
+                key = (model_dir, seed, wr["week"])
+                if key in engine_stockout:
+                    so = engine_stockout[key]
+                elif any(k[0] == model_dir for k in engine_stockout):
+                    raise RuntimeError(
+                        f"{key}: model has engine-replay stockouts but this week is "
+                        "missing from cost_weeks.csv -- refusing the trace-derived flag")
+                else:
+                    print(f"WARNING: no engine replay for {model_dir}; stockout falls "
+                          "back to trace arithmetic, which MISSES air-expedited "
+                          "arrivals -- run analysis/cost_decomp.py first", flush=True)
+                    so = wr["stockout"]
                 rows.append({
                     "model": model_dir, "seed": seed, "week": wr["week"],
                     "factors_stressed_true": ";".join(sorted(stressed_by_week.get(wr["week"], set()))),
                     "factors_named": ";".join(sorted(factors_named)),
                     "week_cost": wr["week_cost"],
-                    "stockout": wr["stockout"],
+                    "stockout": so,
                 })
             # one trace = one atomic append; a crash loses at most the trace in flight
             writer.writerows(rows)
@@ -349,7 +394,8 @@ def main():
     metrics_path = RUNS_DIR / "belief_metrics.csv"
     with open(metrics_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["model", "seed", "mean_detection_lag",
-                                          "n_episodes", "n_never_detected", "knowing_doing_rate"])
+                                          "n_episodes", "n_never_detected", "knowing_doing_rate",
+                                          "n_undetectable"])
         w.writeheader()
         w.writerows(metrics_rows)
     print(f"wrote {metrics_path} ({len(metrics_rows)} rows)", flush=True)

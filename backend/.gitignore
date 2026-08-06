@@ -12,11 +12,13 @@ claude-mds/
 # agent run artifacts (logs, world pickles, sqlite checkpoints) stay ignored,
 # but the pipeline code, lab log, and small canonical reference CSVs are tracked
 runs/*
+!runs/TRACKER.md
 !runs/grade_beliefs.py
 !runs/results_tables.py
 !runs/ladder-v1/
 runs/ladder-v1/*
 !runs/ladder-v1/*.csv
+!runs/ladder-v1/*.md
 !runs/ladder-v1/manifest.json
 AGENTS.md
 !runs/ladder-v1/anthropic-claude-sonnet-5/

@@ -59,7 +59,9 @@ with open(ROOT / "belief_metrics.csv") as f:
         missed[m] += int(row["n_never_detected"])
         episodes[m] += int(row["n_episodes"])
 for m in MODELS:
-    assert episodes[m] == 283, f"{m}: {episodes[m]} episodes"
+    # D2b fix 2026-07-30: 266 detectable episodes (283 minus 17 final-week
+    # onsets, undetectable by construction, excluded at the grader)
+    assert episodes[m] == 266, f"{m}: {episodes[m]} episodes"
 det = {m: (episodes[m] - missed[m]) / episodes[m] for m in MODELS}
 print("detection:", {m: round(det[m], 3) for m in MODELS})
 
@@ -70,7 +72,7 @@ NAME = {"sonnet-5": "Claude Sonnet 5", "gpt-5.4": "GPT-5.4",
         "deepseek-v4-pro": "DeepSeek-V4-Pro", "grok-4.5": "Grok 4.5"}
 plt.rcParams.update({"font.family": "sans-serif", "font.size": 7,
                      "axes.edgecolor": "#787880", "axes.linewidth": 0.7})
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(5.5, 2.2),
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(5.5, 1.95),
                                gridspec_kw={"width_ratios": [0.8, 1.6], "wspace": 0.32})
 
 # panel (a): detection rate (uniform)

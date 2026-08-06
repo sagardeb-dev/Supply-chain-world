@@ -350,11 +350,18 @@ def execute(w, cand: dict) -> float:
 # --------------------------------------------------------------------------
 # Weekly driver.
 # --------------------------------------------------------------------------
-def run_oracle(seed: int, k: int = 100, cfg: WorldConfig = None, trace: bool = False) -> float:
+def run_oracle(seed: int, k: int = 100, cfg: WorldConfig = None, trace: bool = False,
+               trans_override: dict = None, week_rows: list = None) -> float:
     cfg = cfg or WorldConfig(sup_mask_otif=True)
     w = World(cfg, registry=RICH)
     w.reset(seed)
     filts = {f: build(cfg) for f, (build, _) in FACTORS.items()}
+    if trans_override:
+        # learned-dynamics oracle (fit_oracle.py): swap the transition tables;
+        # filtering AND lookahead sampling both read filt.trans, so this one
+        # override replaces every use of the true dynamics.
+        for f, filt in filts.items():
+            filt.trans = trans_override[f]
     mc_rng = random.Random(seed * 7919 + 13 + k)  # separate stream; never touches world.rng
     cum = 0.0
 
@@ -390,6 +397,10 @@ def run_oracle(seed: int, k: int = 100, cfg: WorldConfig = None, trace: bool = F
 
         cost = execute(w, best_cand)
         cum += cost
+        if week_rows is not None:
+            # engine-truth per-week cost components, same dict cost_decomp.py
+            # buckets from on the LLM side
+            week_rows.append((w.week, dict(w.trace[-1]["obs"]["cost_breakdown"])))
 
         if trace:
             argmaxes = " ".join(f"{f}={filts[f].argmax_regime()[0]}" for f in FACTORS)
@@ -407,14 +418,21 @@ def main():
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--seeds", type=str, default=None)
     ap.add_argument("--k", type=int, default=None)
+    ap.add_argument("--params", default=None,
+                    help="learned_trans.json from fit_oracle.py --fit")
     args = ap.parse_args()
+
+    trans_override = None
+    if args.params:
+        from fit_oracle import load_learned_trans
+        trans_override = load_learned_trans(args.params, WorldConfig(sup_mask_otif=True))
 
     if args.seeds:
         seeds = [int(x) for x in args.seeds.split(",")]
         cfg = WorldConfig(sup_mask_otif=True)
         print(f"{'seed':>5} {'oracle':>9} {'suez20':>9} {'cape20':>9} {'bstock':>9}")
         for s in seeds:
-            oc = run_oracle(s, k=100, cfg=cfg, trace=False)
+            oc = run_oracle(s, k=100, cfg=cfg, trace=False, trans_override=trans_override)
             suez = fixed_policy_cost(s, "suez", cfg, registry=RICH)
             cape = fixed_policy_cost(s, "cape", cfg, registry=RICH)
             bs = base_stock_cost(s, cfg, registry=RICH)
@@ -425,11 +443,11 @@ def main():
 
     if args.k is not None:
         for k in (50, 100, 200):
-            total = run_oracle(seed, k=k, trace=False)
+            total = run_oracle(seed, k=k, trace=False, trans_override=trans_override)
             print(f"k={k:>4}: total={total:.0f}")
         return
 
-    total = run_oracle(seed, k=100, trace=True)
+    total = run_oracle(seed, k=100, trace=True, trans_override=trans_override)
     print(f"TOTAL: {total:.0f}")
 
 

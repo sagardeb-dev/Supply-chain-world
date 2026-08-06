@@ -1,7 +1,7 @@
 {
   "experiment": "ladder-v1",
-  "generated": "2026-07-11",
-  "code": "commit 932ce7a",
+  "generated": "2026-07-30",
+  "code": "commit b8f260f",
   "world": "RICH 6-factor, single product, masked (sup_mask_otif=true)",
   "prompt_arm": "faithful (rules only, no playbook)",
   "seeds": {

@@ -53,17 +53,17 @@ symptom-blind base-stock floor (0) and this oracle (1) yields a skill
 score, and grading each week's written rationale yields a stated-belief
 detection lag and a knowing-doing rate, so state estimation and control
 are measured separately. On fifty seeds with curated stress profiles,
-Claude Sonnet 5, GPT-5.4, DeepSeek-V4-Pro, and Grok 4.5 detect 84--88\%
-of hidden failures, typically within a week of onset, yet span skill
-scores from $0.62$ to $-0.23$: two of the four end below the
-symptom-blind floor while naming factors slightly \emph{faster} than the
-two that beat it. The failure has two faces. Where stress persists,
-34--43\% of correctly diagnosed stress weeks still end in stockout for
-every model (a rate that partly reflects the severity of the weeks models
-notice; Section~5). That rate also runs opposite to skill: the two models
-under the floor stock out \emph{least} on diagnosed weeks, so
-under-response is only one face of the gap, and their traces point to the
-other --- responses whose cost exceeds what they protect. The bottleneck
+Claude Sonnet 5, GPT-5.4, DeepSeek-V4-Pro, and Grok 4.5 detect 89--94\%
+of detectable hidden failures, typically within a week of onset, yet span skill
+scores from $0.62$ to $-0.23$: two of the four fail to beat the
+symptom-blind floor while naming factors no slower than the
+two that do. The failure has two faces. Where stress persists,
+18--26\% of correctly diagnosed stress weeks still end in stockout (a
+rate that partly reflects the severity of the weeks models
+notice; Section~5). Under-response is only one face of the gap: a cost
+decomposition of every episode shows the two below-floor models bleeding
+instead through bulk over-ordering and holding, in excess of what the
+fair oracle spends on the same weeks. The bottleneck
 for current agents sits between a correct stated belief and the costly
 action it calls for; STOCKTAKE measures both directions of that failure.
 \end{abstract}
@@ -89,12 +89,11 @@ The second failure mode is documented in bandit and game settings under the
 name of the \textbf{knowing-doing gap}
 \citep{schmied2025greedy,sobotka2026broken}: models often hold or state
 correct beliefs about the task yet fail to act on them.
-These are failures of perception and failures of action --- in the language
-of partially observable decision processes, failures of \emph{state
-estimation} and failures of \emph{control} --- and they call for
-different fixes: better inference scaffolding in the first case, better
-policy elicitation in the second. Telling them apart, however, requires knowing
-what a correct inference \emph{was worth}.
+In the language of partially observable decision processes, these are
+failures of \emph{state estimation} and failures of \emph{control}, and
+they call for different fixes: better inference scaffolding in the first
+case, better policy elicitation in the second. Telling them apart,
+however, requires knowing what a correct inference \emph{was worth}.
 
 Existing evidence for the knowing-doing gap does not support that accounting.
 It comes from probes and single decisions in settings where the correct
@@ -140,23 +139,15 @@ Our contributions are:
   fifty seeds, under a rules-only prompt with no strategy playbook.
 \end{enumerate}
 
-Across 200 episodes, detection proves nearly uniform: all four models name
-84--88\% of hidden-factor episodes, typically within a week of onset, and
-the two models with the lowest skill scores name them fastest. Costs
-diverge sharply nonetheless: two of the four models finish below the
-symptom-blind floor overall --- on roughly half their seeds, a rule that
-reads no symptoms at all would have been cheaper than acting on their
-largely correct diagnoses. The gap also concentrates: on
-\textsc{persistent} seeds, 34--43\% of correctly diagnosed stress weeks
-still end in stockout for every model, a rate Section~5 shows is partly
-severity (weeks bad enough to notice are also bad enough to strain the
-shelf). What separates models is the distance between seeing a problem and
-acting on it, and the failures run in both directions: ordering too little
-too late, and paying too much for protection.
+Across 200 episodes, detection proves nearly uniform while costs diverge
+sharply; Section~5 gives the numbers. What separates models is the
+distance between seeing a problem and acting on it, and the failures run
+in both directions: ordering too little too late, and paying too much for
+protection.
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\textwidth]{figures/fig1.pdf}
+  \includegraphics[width=0.85\textwidth]{figures/fig1.pdf}
   \caption{\textbf{Measuring the knowing-doing gap with a fair oracle.} Six
   hidden factor processes evolve on a fixed, action-independent event tape
   (left; dark segments mark stress regimes) and emit noisy symptoms into a
@@ -171,28 +162,6 @@ too late, and paying too much for protection.
 
 \section{Related Work}
 \label{sec:related}
-
-\begin{table}[t]
-  \caption{The benchmarks closest to STOCKTAKE. Cells condense each paper's
-  own description of its task and reference policies; citations in text.
-  RetailBench builds its simulator from real retail records; ours is
-  synthetic and seeded.}
-  \label{tab:related}
-  \centering
-  \small
-  \setlength{\tabcolsep}{5pt}
-  \begin{tabular}{@{}l >{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{1.6cm} >{\raggedright\arraybackslash}p{2.9cm} >{\raggedright\arraybackslash}p{3.1cm} l@{}}
-    \toprule
-    Benchmark & Setting & Horizon & Hidden state & Reference policy & Belief graded \\
-    \midrule
-    Vending-Bench & vending machine & 2{,}000 messages & per-step noise only & none (human baseline) & no \\
-    AIM-Bench & five inventory envs & 20 rounds (NVP); varies & stochastic demand, lead times & hindsight optimum & no \\
-    RetailBench & retail store sim & 180 days & news-impact and supplier params & rule-based, privileged & no \\
-    \midrule
-    \textbf{STOCKTAKE} & import replenishment & 26 weeks & six persistent factor processes & Bayes-filter rollout on the agent's observations & yes \\
-    \bottomrule
-  \end{tabular}
-\end{table}
 
 Evaluating LLM agents as sequential decision-makers has grown from
 single-turn tool use into month-scale simulations of running a business.
@@ -230,8 +199,7 @@ inventory control with
 hidden Markov-modulated demand to a fully observed problem, in their case
 to compute optimal policies.
 
-The task is causal only in a specific, limited sense, and we place it
-against that literature explicitly. Causal-reasoning benchmarks test
+The task is causal only in a limited sense. Causal-reasoning benchmarks test
 whether a model can recover causal structure or answer interventional and
 counterfactual queries \citep{cladder2023}, and there is evidence that
 models recite causal facts from text rather than infer them
@@ -244,7 +212,8 @@ model, followed by cost-sensitive control. The benchmark is
 complementary to causal-reasoning evaluations: it measures whether a
 correct causal attribution, once formed, survives the trip to an action.
 
-Table~\ref{tab:related} summarizes the benchmarks closest to ours. In each,
+Table~\ref{tab:related} (Appendix~\ref{app:related}) summarizes the
+benchmarks closest to ours. In each,
 the reference policy either reads information the agent is denied
 (RetailBench's rule-based oracle takes ``structured simulator fields'' as
 input; AIM-Bench's ex-post optimum is computed from realized demand) or is
@@ -299,83 +268,42 @@ trouble cheaply; one that reads them late cannot.
 
 \subsection{The hidden world}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\textwidth]{figures/fig_world.pdf}
-  \caption{The hidden world behind the dashboard. The hidden state is six
-  independent Markov chains; starred regimes are the stress regimes that
-  define episodes in Section~4. Each chain emits one symptom stream
-  into the weekly dashboard, and those streams are all the agent (and the
-  oracle) ever sees. Two symptoms mislead by construction (orange): the
-  supplier scorecard reads one severity band better than the truth, and
-  the canal's transit counts crash identically for a real closure and a
-  false alarm.}
-  \label{fig:world}
-\end{figure}
-
 The environment is a factored POMDP. Two structural properties of its
 hidden state make a fair reference policy computable. Let $x_t = (x_t^1,
 \dots, x_t^6)$ denote the hidden state in week $t$, one factor process
 each for demand regime, supplier health, freight market, port congestion,
 batch quality, and canal status, each a small Markov chain over
 regime--age pairs that moves between a baseline and one or more stress
-regimes (Figure~\ref{fig:world}). The regime and its age set the
+regimes (diagrammed in Figure~\ref{fig:world},
+Appendix~\ref{app:world}). The regime and its age set the
 transition probabilities: how likely a stress episode is to start, to
 persist once started, and to resolve.
 
 First, \textbf{the dynamics are factored and action-independent}. Each
 factor steps as $x_{t+1}^i \sim P^i(\cdot \mid x_t^i)$, reading neither
-the other factors nor the agent's action. Algorithm~\ref{alg:tape} is
-the entire generative process: one random stream, seeded once, consumed
-by the six factors in a fixed order. Because no step reads an action,
-the seed fixes every regime change and every noisy reading for all 26
-weeks before the agent exists; we call this fixed record the episode's
-\emph{event tape}. Two policies run on the same seed face byte-identical
-shocks and symptom noise, so the reference policies of Section~4 are
-evaluated on the very tape the agent lived through, not on a re-rolled
-one. Actions decide how much each shock costs, never what happens in the
+the other factors nor the agent's action; the entire generative process
+is one random stream, seeded once, consumed by the six factors in a
+fixed order (Algorithm~\ref{alg:tape}, Appendix~\ref{app:world}). The
+seed therefore fixes every regime change and every noisy reading for all
+26 weeks before the agent exists; we call this fixed record the
+episode's \emph{event tape}. Two policies run on the same seed face
+byte-identical shocks and symptom noise, so the reference policies of
+Section~4 are evaluated on the very tape the agent lived through.
+Actions decide how much each shock costs, never what happens in the
 hidden world.
 
-\begin{algorithm}[t]
-\caption{Event-tape generation. One random stream $r$, seeded once, is
-consumed by the six factors in a fixed order; no step reads an agent
-action, so the tape is a pure function of the seed. Lines 5--10 are the
-transition kernel $P^i$ and line 11 the emission kernel $Q^i$ of
-Section~3.2; every onset rate, persistence rate, age cap, and band mean
-is tabulated in Appendix~\ref{app:world}.}
-\label{alg:tape}
-\begin{algorithmic}[1]
-\State $r \gets \textsc{Random}(\mathit{seed})$
-\State $(s^i, a^i) \gets (\text{baseline}^i,\, 0)$ for each factor $i$ \Comment{regime and its age}
-\For{week $t = 1, \dots, 26$}
-  \For{factor $i$ in fixed order} \Comment{canal, supplier, demand, freight, port, quality}
-    \If{$s^i$ is the baseline}
-      \State leave it for regime $k$ w.p.\ $\mathrm{onset}^i_k$, else stay \Comment{e.g.\ clear $\to$ building}
-    \Else
-      \State stay w.p.\ $\mathrm{persist}^i(s^i, a^i)$, else advance a stage or recover \Comment{forced out at $\mathrm{cap}^i(s^i)$}
-    \EndIf
-    \State $a^i \gets a^i{+}1$ if the regime held, else $0$; \quad $x_t^i \gets (s^i, a^i)$
-    \State $y_t^i \gets$ factor $i$'s readings, drawn from $r$ around its band's mean \Comment{e.g.\ $\mathrm{round}\,\mathcal{N}(\mu_{\text{band}}, \sigma)$}
-  \EndFor
-\EndFor
-\State \Return the tape $(x_{1:26},\, y_{1:26})$
-\end{algorithmic}
-\end{algorithm}
-
 The port factor instantiates the template. From clear, the port can
-start building toward a backlog or take a sudden customs hold (line~6);
-building tips into congested or clears (line~8); congested persists week
-to week until its age cap forces recovery. Each week the realized berth
-wait is drawn around the current band's mean, roughly one day when clear
-and sixteen when congested, and while congested every arriving shipment
-is held an extra week. The band on line~11 is where the benchmark's
-ambiguities are constructed: for several factors the first week of two
-different regimes maps to the same band, so a fresh customs hold and
-newly tipped congestion both read ``slow'', and a demand promotion and a
-seasonal lift both open on the same ``surge''. A single reading cannot
-say which stress has begun; only the following weeks separate them. A
-few factors draw auxiliary state from the same stream in the same fixed
-order, such as the canal event's type at onset.
+start building toward a backlog or take a sudden customs hold; building
+tips into congested or clears; congested persists week to week until its
+age cap forces recovery. Each week the realized berth wait is drawn
+around the current band's mean, roughly one day when clear and sixteen
+when congested, and while congested every arriving shipment is held an
+extra week. The emission bands are where the benchmark's ambiguities are
+constructed: for several factors the first week of two different regimes
+maps to the same band, so a fresh customs hold and newly tipped
+congestion both read ``slow'', and a demand promotion and a seasonal
+lift both open on the same ``surge''. A single reading cannot say which
+stress has begun; only the following weeks separate them.
 
 Second, \textbf{the observations are factored}. The weekly dashboard
 $o_t$ contains the fully observed logistics state (on-hand stock, orders
@@ -415,22 +343,25 @@ too benign to separate good decision-making from bad (those on which the
 two reference policies of Section~4 cost nearly the same) are discarded.
 The benchmark fixes fifty seeds chosen this way from a 200-seed pool:
 \begin{itemize}
-  \item \textsc{isolated} (12 seeds), short, non-overlapping
-        single-factor shocks;
-  \item \textsc{persistent} (15 seeds), a multi-week stretch of port
-        congestion overlapping a demand rise. Here the intuitively
-        appealing response, freezing orders until the congestion clears,
-        is the costly one, because orders placed \emph{through} the
-        congestion arrive as it clears;
-  \item \textsc{compound} (23 seeds), pileups of three or more concurrent
-        factor episodes.
+  \item \textsc{isolated} (12 seeds), short single-factor shocks: no
+        week on the tape has two factors stressed at once;
+  \item \textsc{persistent} (15 seeds), a port blockage of at least four
+        consecutive weeks alongside at least four weeks of demand
+        stress. Here the intuitively appealing response, freezing orders
+        until the congestion clears, is the costly one, because orders
+        placed \emph{through} the congestion arrive as it clears;
+  \item \textsc{compound} (23 seeds), everything else: two or more
+        concurrent factor episodes with no single blockage dominating
+        the tape.
 \end{itemize}
 Compound stress is deliberately oversampled relative to the pool; it is the
 regime the benchmark targets, and all results are reported per group.
-Because membership is fixed by the tape alone, the structure of hidden
-stress is an independent variable of the benchmark, and the same minting
-recipe extends it: new instances of any profile can be generated and
-classified with no agent runs and no human labeling.
+The fifty seeds were curated iteratively across three rounds, screening
+for stress coverage and headroom, and the persistent-profile blockage
+threshold was relaxed from seven weeks to four between rounds; a
+committed classifier reproduces all fifty labels from the tape features
+alone, so new instances of any profile can be minted and classified with
+no agent runs and no human labeling.
 
 \subsection{Agent prompt}
 
@@ -490,11 +421,14 @@ agent's raw cost beats the floor's. Three further seeds have headroom under
 \$700, where the ratio is noisy; they are flagged in the per-seed results
 but not excluded. A worked example from seed~1: base-stock costs \$9{,}101,
 the oracle mean is \$6{,}932, and Claude Sonnet 5 spent \$8{,}539, so its
-skill is $(9101-8539)/(9101-6932)=0.26$ --- it recovered about a quarter of
-what seeing the symptoms was worth on that tape. For belief-side metrics, a
+skill is $(9101-8539)/(9101-6932)=0.26$. For belief-side metrics, a
 \emph{stress episode} is a maximal run of consecutive weeks in which one
 factor is truly in a stress regime (283 episodes per model across the
-fifty tapes).
+fifty tapes, of which 266 are detectable: seventeen begin in the final
+week, after the last rationale is written, and are excluded from the
+detection denominator rather than counted as missed; the final week's
+stress weeks are likewise excluded from the diagnosed/undiagnosed pools,
+since no rationale exists to judge them by).
 Detection lag is the number of weeks from episode onset until the factor is
 first named in the agent's rationale (averaged over detected episodes;
 never-detected episodes are reported separately), and the knowing-doing rate
@@ -503,8 +437,15 @@ is
 \mathrm{KD} \;=\; \Pr\!\left(\,\text{stockout in week } t \;\middle|\; \text{a truly stressed factor is named in week } t\,\right),
 \end{equation}
 estimated over the group's correctly diagnosed stress weeks, where
-``stockout'' means the stock available that week (inventory plus arrivals)
-fell short of realized demand. A high KD rate means correct diagnosis coexisting with empty
+``stockout'' means the world served less than that week's realized demand
+--- an actual shortfall on the engine's books.\footnote{An earlier version
+of this metric re-derived the stockout flag from the trace's printed
+inventory arithmetic, which omits air-expedited arrivals; 343 weeks that
+air freight saved were miscounted as stockouts, inflating every
+knowing-doing rate, most for the heaviest air users. All belief-side
+stockout figures here are recomputed from the engine replay of
+Table~\ref{tab:decomp}. Detection and lag never read this flag and are
+unaffected.} A high KD rate means correct diagnosis coexisting with empty
 shelves.
 
 \textbf{Belief grading.} Whether a rationale names a factor is judged by a
@@ -525,18 +466,20 @@ harness (OpenRouter model IDs \texttt{anthropic/claude-sonnet-5},
 per model--seed pair, 200 episodes in total, each validated to the full 26
 weeks, all under the rules-only prompt of
 Section~3.\footnote{An earlier circulated draft reported DeepSeek-V4-Pro
-on a twenty-seed subset: a fault in the belief-grading pipeline had
-silently read stale run files for the remaining seeds. All numbers here
-are from complete fifty-seed runs, regraded and rescored.}
+on a twenty-seed subset after a belief-grading fault silently read stale
+run files; all numbers here are from complete fifty-seed runs, regraded
+and rescored.}
 
 \section{Results}
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\textwidth]{figures/fig2.pdf}
+  \includegraphics[width=0.85\textwidth]{figures/fig2.pdf}
   \caption{\textbf{Seeing is uniform; doing is not.} (a) All four models
-  detect 84--88\% of their hidden-factor stress episodes (283 per model
-  over the fifty seeds), typically within a week of onset. (b) Group-mean
+  detect 89--94\% of their detectable hidden-factor stress episodes (266
+  per model over the fifty seeds; seventeen more begin in the final week,
+  after the last rationale, and are excluded rather than counted as
+  missed), typically within a week of onset. (b) Group-mean
   skill by stress profile (lines), with per-seed scores as faint dots.
   Costs diverge across models despite panel (a): DeepSeek-V4-Pro and
   Grok 4.5 finish below the symptom-blind floor overall.}
@@ -569,50 +512,36 @@ are from complete fifty-seed runs, regraded and rescored.}
   \caption{Belief-side metrics. Detection is pooled over each model's
   stress episodes; the knowing-doing rate is the fraction of correctly
   diagnosed stress weeks that still ended in stockout, pooled over the
-  group's stress weeks. Table~\ref{tab:confound} reports the severity
-  confound that qualifies these rates.}
-  \label{tab:belief}
+  group's stress weeks (week counts in parentheses; the final week's
+  stress weeks are excluded as unknowable --- no rationale exists to
+  judge them by). The last column is the severity-confound check: the
+  stockout rate on stress weeks the model failed to diagnose. Diagnosed
+  weeks stock out more than undiagnosed ones for every model
+  (Holm-adjusted $p \le 0.022$), so part of the knowing-doing rate
+  reflects severity rather than inaction.}
+  \label{tab:belief}\label{tab:confound}
   \centering
-  \begin{tabular}{lcccccc}
+  \small
+  \begin{tabular}{lccccccc}
     \toprule
-    & \multicolumn{2}{c}{Detection} & \multicolumn{4}{c}{Knowing-doing rate} \\
-    \cmidrule(lr){2-3}\cmidrule(lr){4-7}
-    Model & missed & mean lag (wk) & \textsc{isol.} & \textsc{persist.} & \textsc{comp.} & all \\
+    & \multicolumn{2}{c}{Detection} & \multicolumn{4}{c}{Knowing-doing rate} & Confound \\
+    \cmidrule(lr){2-3}\cmidrule(lr){4-7}\cmidrule(lr){8-8}
+    Model & missed & mean lag (wk) & \textsc{isol.} & \textsc{persist.} & \textsc{comp.} & all & undiag. \\
     \midrule
-    Claude Sonnet 5 & 33/283 & 0.42 & 0.24 & 0.43 & 0.30 & 0.34 \\
-    GPT-5.4         & 35/283 & 0.40 & 0.08 & 0.37 & 0.22 & 0.26 \\
-    DeepSeek-V4-Pro & 46/283 & 0.32 & 0.07 & 0.40 & 0.22 & 0.26 \\
-    Grok 4.5        & 37/283 & 0.32 & 0.09 & 0.34 & 0.21 & 0.24 \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\begin{table}[t]
-  \caption{Severity confound check for the knowing-doing rate: stockout
-  rate on truly stressed weeks, split by whether the week's rationale
-  correctly diagnosed the stress (week counts in parentheses). Diagnosed
-  weeks stock out \emph{more} than undiagnosed ones for every model, so
-  part of the knowing-doing rate reflects severity rather than inaction.}
-  \label{tab:confound}
-  \centering
-  \begin{tabular}{lcc}
-    \toprule
-    Model & diagnosed stress weeks & undiagnosed stress weeks \\
-    \midrule
-    Claude Sonnet 5 & 0.34 (515) & 0.19 (162) \\
-    GPT-5.4         & 0.26 (502) & 0.14 (175) \\
-    DeepSeek-V4-Pro & 0.26 (469) & 0.11 (208) \\
-    Grok 4.5        & 0.24 (544) & 0.12 (133) \\
+    Claude Sonnet 5 & 16/266 & 0.42 & 0.10 & 0.22 & 0.18 & 0.18 (515) & 0.06 (124) \\
+    GPT-5.4         & 18/266 & 0.40 & 0.05 & 0.18 & 0.08 & 0.11 (502) & 0.04 (137) \\
+    DeepSeek-V4-Pro & 29/266 & 0.32 & 0.05 & 0.26 & 0.14 & 0.17 (469) & 0.02 (170) \\
+    Grok 4.5        & 20/266 & 0.32 & 0.06 & 0.18 & 0.13 & 0.14 (544) & 0.02 (95) \\
     \bottomrule
   \end{tabular}
 \end{table}
 
 All four models see the hidden world about equally well
-(Table~\ref{tab:belief}, Figure~\ref{fig:results}a). Each detects 84--88\% of
-its stress episodes, with a mean lag of 0.32--0.42 weeks: when a factor
+(Table~\ref{tab:belief}, Figure~\ref{fig:results}a). Each detects 89--94\% of
+its detectable stress episodes, with a mean lag of 0.32--0.42 weeks: when a factor
 enters a stress regime, its symptoms are typically named in the rationale
 within the same week. The two models that end up below the base-stock
-floor on cost have the \emph{shortest} detection lags. Whatever separates
+floor on cost detect no slower than the two that beat it. Whatever separates
 these models on this task, it is not state estimation.
 
 Skill scores, in contrast, diverge widely (Table~\ref{tab:skill},
@@ -633,49 +562,90 @@ DeepSeek's \textsc{compound} mean is pulled up by a single outlier tape;
 its group median is 0.32. Individual scores above 1 occur (33 of 196
 scoreable runs) and are legitimate, since the oracle is Bayes-optimal in
 expectation but not per-tape. Even the best model leaves over a third of
-the gap to a policy computed from identical observations, so the benchmark
-is far from saturated.
+the floor-to-oracle gap unrecovered, so the benchmark is far from
+saturated.
+
+\paragraph{Uncertainty.} Because every model runs the same fifty seeds, we
+quantify uncertainty with a paired design over the 49 scoreable seeds:
+$10^4$-draw paired bootstrap for 95\% confidence intervals and Wilcoxon
+signed-rank tests on per-seed differences, Holm-corrected within each
+family of comparisons. Mean skill is $0.62\ [0.40, 0.83]$ for GPT-5.4,
+$0.49\ [0.32, 0.65]$ for Claude Sonnet 5, $-0.13\ [-0.39, 0.12]$ for
+Grok 4.5, and $-0.23\ [-0.57, 0.08]$ for DeepSeek-V4-Pro. The picture that
+survives testing is a \emph{two-tier} one: every cross-tier contrast is
+significant (Holm-adjusted $p \le 2\times10^{-4}$), while neither
+within-tier ordering is (GPT-5.4 vs.\ Claude Sonnet 5, $p = 0.26$;
+Grok 4.5 vs.\ DeepSeek-V4-Pro, $p = 0.80$). The two bottom-tier means are
+statistically indistinguishable from the symptom-blind floor itself
+($p = 0.33$ and $0.56$): the supported claim is that they fail to beat a
+rule that ignores every symptom, not that they reliably fall below it. Of
+the \textsc{compound} exception, only the GPT-5.4 side is significant
+(Claude Sonnet 5 trails it by 0.53 there, Holm $p = 0.001$); Sonnet's
+deficit against the two bottom-tier models on \textsc{compound} is not.
+The median half-width of a pairwise-contrast interval, 0.31 skill units,
+is the benchmark's effective resolution at fifty seeds: single runs
+separate tiers, not neighbors. Noise from the oracle reference itself is
+negligible --- propagating its per-seed standard error moves a skill score
+by a median of 0.02, against a seed-to-seed spread of 0.6--1.2. The same
+machinery applied to the belief side (seed-cluster bootstrap over each
+model's fifty seeds) grades those claims too. No pairwise difference in
+detection rate survives correction (smallest Holm-adjusted $p = 0.05$), so
+we describe detection as uniform in the sense of no detectable difference,
+not proven equality. The apparent lag ordering --- the two bottom-tier
+models naming factors fastest --- dissolves entirely (all Holm-adjusted
+$p = 1.0$); the supported statement is that they detect \emph{no slower}.
+On the corrected stockout flags (see the footnote in Section~4), the
+knowing-doing peak on \textsc{persistent} seeds holds in point estimate
+for all four models but is significant for two (GPT-5.4 and
+DeepSeek-V4-Pro, Holm-adjusted $p = 0.018$ and $0.028$), and the severity
+confound of Table~\ref{tab:confound} is significant for all four models
+(Holm-adjusted $p \le 0.022$) once the final week's unknowable stress
+weeks leave the undiagnosed pool.
 
 The knowing-doing rate (Table~\ref{tab:belief}) shows where correct diagnosis
-fails to prevent empty shelves. For every model the rate peaks on
-\textsc{persistent} seeds, at 0.34--0.43, versus 0.07--0.24 on
-\textsc{isolated} seeds: when a disruption lasts many weeks, a correctly
-diagnosed stress week still ends in stockout roughly four times in ten.
-Brief shocks are handled; sustained ones convert knowledge into cost.
-The rate is not a model ranking, however: read across models it runs
-\emph{opposite} to skill, with the near-best model (Claude Sonnet 5)
-highest and the worst (Grok 4.5) lowest. The reason is that a
+fails to prevent empty shelves. The rate peaks on
+\textsc{persistent} seeds in point estimate for every model, at 0.18--0.26
+versus 0.05--0.10 on \textsc{isolated} seeds, though the peak reaches
+significance for two of the four (GPT-5.4 and DeepSeek-V4-Pro, Holm
+$p = 0.018$ and $0.028$; Claude Sonnet 5 and Grok 4.5, $p = 0.23$): when a
+disruption lasts many weeks, roughly one correctly diagnosed stress week
+in five still ends in stockout.
+Brief shocks are handled; sustained ones convert knowledge into cost, and
+a pre-registered check attributes the peak to duration rather than to the
+profile label: per-seed rates rise with the longest port blockage
+(Spearman $+0.36$ to $+0.62$, Holm $p \le 0.015$, for three of the four
+models, GPT-5.4 positive but not significant), while \textsc{persistent}
+membership adds no detectable association once blockage duration is
+controlled (Holm $p \ge 0.086$ for all four).
+The rate is not a model ranking, however, and it does not track skill in
+either direction: the highest rate belongs to the second-best model
+(Claude Sonnet 5, 0.18) and the lowest to the best (GPT-5.4, 0.11). The
+reason is that a
 stockout-based rate sees only one face of the gap. An agent can fail on a
 correct diagnosis by under-responding, stocking out despite naming the
-problem, or by over-responding, buying so much premium protection that
+problem, or by over-responding, buying so much protection that
 stockouts are rare while the bill exceeds what the symptom-blind floor
-would have paid. The two models below the floor fit the second face:
-their diagnosed-week stockout rates are the lowest of the four while
-their total costs are the highest. We quantify the response taxonomy only
-for the two above-floor models (below); for the two below it, the
-mechanism rests on trace readings like Exhibit~B in Appendix~D, not on a
-measured cost decomposition. Two further qualifications keep
+would have paid. The two models below the floor show stockout rates
+between the leaders', while their diagnosed-week totals are the highest
+of the four. A per-week cost decomposition of all
+four models (below) measures which face each model shows and through
+which instrument. Two further qualifications keep
 the rate from reading as a week-level fault measure. A
 stockout in a given week can stem from an ordering decision made weeks
-earlier. And Table~\ref{tab:confound} shows a severity confound: stressed
-weeks the agent correctly diagnosed stock out more often than stressed
-weeks it missed, for every model, because weeks bad enough to be noticed
-are also bad enough to strain the shelf. The knowing-doing rate therefore
+earlier. And Table~\ref{tab:confound} shows a severity confound: weeks
+bad enough to be noticed are also bad enough to strain the shelf,
+for every model. The knowing-doing rate therefore
 says that correct diagnosis does not guarantee protection; it does not say
 that diagnosis causes stockouts, and we do not rank models on it.
 
 Reading the traces suggests the models fail in opposite directions; full
-excerpts are in Appendix~\ref{app:seeds}. Claude Sonnet 5 on seed~1
-(\textsc{persistent}; port congested weeks 17--24 while demand lifts)
-\emph{freezes}: it diagnoses the congestion in week~16 and skips its sea
-order at once; the orders it does place are held up behind the blocked
-port, and through weeks 22--24, at zero inventory, it stops ordering by sea
-entirely (Figure~\ref{fig:seed1} in the appendix plots the full episode).
-By week~22 it has held zero inventory for two weeks, yet writes
-``I already have a very large pipeline: 104 units in transit \ldots\ ordering
-more now would only add to an already oversized pipeline \ldots\ given
-berth\_wait is still elevated (15 days)'' and orders nothing, counting units
-trapped behind the congestion it itself diagnosed as usable cover. It ends
+excerpts are in Appendix~\ref{app:seeds}, and Figure~\ref{fig:seed1}
+plots the first episode. Claude Sonnet 5 on seed~1 (\textsc{persistent};
+port congested weeks 17--24 while demand lifts) \emph{freezes}: it
+diagnoses the congestion in week~16 and skips its sea order at once, and
+through weeks 22--24, at zero inventory, it stops ordering by sea
+entirely, counting the 104 units trapped behind the congestion it itself
+diagnosed as reason enough (``an already oversized pipeline''). It ends
 with four consecutive zero-inventory weeks costing \$660--\$823 each, while
 the oracle keeps placing modest orders that arrive after the congestion
 clears. DeepSeek-V4-Pro on seed~25 (\textsc{isolated}; a two-week canal
@@ -683,9 +653,8 @@ closure) \emph{flails}: within two weeks of a correct diagnosis it locks
 freight rates for four weeks, air-expedites units, and stacks 80 units of
 orders against $\sim$20-per-week demand, on top of 117 already in
 transit. The closure ends in week~5; the fees and holding costs it bought
-persist, and the episode finishes at skill $-1.45$; the costly response
-outlived the two-week shock it answered. Neither trace contains a
-detection error. The two directions generalize beyond these seeds. In
+persist, and the episode finishes at skill $-1.45$. Neither trace contains
+a detection error. The two directions generalize beyond these seeds. In
 every one of Claude Sonnet 5's nine below-floor seeds, its spending on
 air expedite alone exceeds its entire excess over the floor, and about
 nine in ten of its air orders on those seeds coincide with a genuine
@@ -695,6 +664,72 @@ levers: it never locks freight rates in 87\% of the seeds containing a
 freight spike and never orders a batch inspection in 63\% of the seeds
 with quality escapes, while naming those conditions in its rationales.
 
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{lrrrrrr}
+    \toprule
+    Model & $n$ wk & Procure & Holding & Stockout & Levers & Incident \\
+    \midrule
+    GPT-5.4 & 502 & 61 [49,75] & 98 [93,104] & 20 [11,31] & 91 [76,107] & 30 [21,40] \\
+    \quad\emph{oracle, same weeks} & & \emph{65 [57,75]} & \emph{95 [92,98]} & \emph{37 [25,50]} & \emph{58 [43,75]} & \emph{34 [24,44]} \\
+    Claude Sonnet 5 & 515 & 70 [61,79] & 85 [81,88] & 32 [23,42] & 126 [110,142] & 29 [21,38] \\
+    \quad\emph{oracle, same weeks} & & \emph{65 [57,73]} & \emph{95 [92,98]} & \emph{34 [23,45]} & \emph{55 [40,70]} & \emph{32 [23,41]} \\
+    Grok 4.5 & 544 & 87 [77,96] & 120 [113,128] & 37 [24,52] & 81 [66,96] & 40 [29,53] \\
+    \quad\emph{oracle, same weeks} & & \emph{67 [58,76]} & \emph{95 [92,98]} & \emph{33 [23,44]} & \emph{57 [41,73]} & \emph{32 [23,42]} \\
+    DeepSeek-V4-Pro & 469 & 98 [83,114] & 133 [121,145] & 37 [27,48] & 67 [51,83] & 45 [32,60] \\
+    \quad\emph{oracle, same weeks} & & \emph{68 [59,78]} & \emph{95 [92,98]} & \emph{37 [26,49]} & \emph{60 [43,77]} & \emph{35 [25,46]} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Cost decomposition of correctly diagnosed stress weeks: mean
+  \$/week per component from replaying every logged action through the
+  world engine (the replay reproduces all 5{,}200 logged weekly totals
+  exactly). Italic rows: the fair oracle's spend on the same (seed, week)
+  cells under its 20-replication protocol. Brackets: 95\% seed-cluster
+  bootstrap intervals. Procure = shipping plus diversion surcharge;
+  holding includes capital cost on in-transit units; stockout includes
+  backorder coupling; levers = air, inspection, briefing, audit,
+  dual-sourcing; incident = demurrage plus rework.}
+  \label{tab:decomp}
+\end{table}
+
+The decomposition in Table~\ref{tab:decomp} turns those trace readings into
+measurement. Every model escalates once it diagnoses stress: premium-lever
+spending on diagnosed weeks exceeds the same model's calm-week level by
+\$42--\$87 per week (Holm-adjusted $p < 10^{-4}$ for each of the four), so
+the gap is a matter of instrument and dose, never of sitting still. Claude
+Sonnet 5 buys the most protection, \$126 per diagnosed week with \$116 of
+it air freight, and its air spending exceeds GPT-5.4's by \$31 [13, 50] per
+week (Holm $p < 10^{-4}$) --- the measured form of the over-dosing in
+Exhibit~A. GPT-5.4's lever spending is almost entirely air as well (\$86 of
+\$91); the targeted levers it skips, rate locks and inspections, are cheap
+enough that its under-use shows up in counts, not dollars. For the two
+bottom-tier models the lever bucket, \$81 and \$67 per diagnosed week, is
+not where their cost concentrates: ordering and carrying dominate
+(procurement \$87 and \$98, holding \$120 and \$133 per week), and their
+holding runs \$115--\$129 per week even on calm weeks. Measured,
+their over-response is bulk over-ordering and stock carried against
+$\sim$20-per-week demand, with premium fees a secondary channel.
+The oracle rows turn that composition into excess. The fair oracle spends
+\$55--60 per week on levers during those same diagnosed weeks, so
+escalating is what a competent policy does there; the models' defect is
+dose and instrument. Against that reference, the pre-registered contrasts
+land as predicted for the two below-floor models: Grok 4.5 and
+DeepSeek-V4-Pro hold \$25 [18, 34] and \$38 [26, 50] more per diagnosed
+week than the oracle, and spend \$20 [8, 31] and \$30 [14, 47] more on
+procurement (Holm $p \le 0.0012$ for all four contrasts). Claude Sonnet
+5's air spending runs \$65 [49, 83] per week above the oracle's on its
+diagnosed weeks (Holm $p < 10^{-4}$), while its holding came out
+\emph{below} the oracle's ($-\$10$ [$-14$, $-6$]), the opposite sign
+from our pre-registration, and GPT-5.4 differs from the oracle on
+neither bucket at our resolution. Because week-$t$ books carry each
+policy's earlier decisions, these are comparisons on the same tape
+weeks, not per-decision counterfactuals. One
+pre-registered expectation failed in the opposite direction: we expected
+GPT-5.4's diagnosed-week cost to be more stockout-shaped than Sonnet's,
+and its stockout share is in fact the lower of the two (difference
+$-0.03$ [$-0.06$, $-0.004$], $p = 0.026$).
+
 \section{Discussion and Limitations}
 \label{sec:discussion}
 
@@ -702,44 +737,75 @@ The results support one claim: on this task, frontier-model failures are
 concentrated in control, not state estimation, and the fair oracle makes that
 split measurable. A privileged oracle could not have licensed it, because any
 shortfall could be attributed to the information gap rather than to policy.
-The fairness itself carries one disclosed asymmetry. The oracle receives the
-identical observation stream and never the hidden state, but its filters use
-the true generative parameters (regime means, transition probabilities),
-while the LLM sees only a qualitative world description. Skill~$=1$
-therefore means ``Bayes-optimal given the true model'', a demanding but not
-information-free reference, and scores above 1 are possible and observed.
+The fairness carries the one asymmetry disclosed in Section~4 --- the
+oracle's filters use the true generative parameters, the LLM only a
+qualitative world description --- so skill~$=1$ means ``Bayes-optimal
+given the true model'', and scores above 1 are possible and observed.
+
+The knows-the-physics half of that asymmetry is testable, and we test it.
+We refit every transition probability of the six factor chains by
+Baum--Welch expectation--maximization \citep{rabiner1989hmm} on 200
+passively observed episodes (seeds disjoint from the benchmark's;
+observation streams only, with the sensor model, state topology, and cost
+mechanics held known), then reran the full reference protocol with the
+learned tables in place of the true ones. The learned reference differs
+from the true one by $+\$71\ [-\$20, +\$186]$ per seed (1.2\% of the mean
+reference cost; Wilcoxon $p = 0.47$): a reference that learned its
+dynamics from watching is statistically indistinguishable from the one
+that was given them, with plausible degradation capped at three percent.
+Re-scoring all four models against the learned reference shifts mean
+skill by $+0.04$ to $+0.10$, every interval straddling zero and inside
+the benchmark's 0.31 resolution, so the two-tier structure is unchanged;
+one seed flips to negative headroom and drops out. The fit is imperfect
+where the data are thin: the quality chain's deep drifting-age hazards
+stay badly estimated (deep ages are rarely visited and the
+accept/marginal/reject inspection channel carries no age signal), and the
+largest cost gaps land exactly where that predicts, on quality-stressed
+and \textsc{compound} seeds, without reaching significance there either.
+What stays privileged is stated: emission parameters and the planner's
+cost model are still read from the configuration, and the passive tapes
+lack the realized-fill channel a deployed oracle sees when it orders.
 
 The belief metrics read stated beliefs, and stated belief is a lower bound.
 Detection is measured from the rationale the model writes, not from its
 internal state; a model may track a factor it never mentions. This biases
 detection down, which strengthens the seeing-vs-doing contrast, but the
 knowing-doing rate inherits the grader's labels. A stratified manual read
-found the labels correct on the sampled metric-relevant weeks, and an
+found the labels correct on the sampled metric-relevant weeks; an
 independent second grader agrees with the production grader on the
 metric-relevant component (which named factors intersect true stress) at
-89\%; residual disagreement sits on calm-week over-labels, which cannot
+89\%, with residual disagreement on calm-week over-labels, which cannot
 enter the knowing-doing rate by construction. Both audits sampled the
-original twenty-seed grading run; all later grading (the thirty expansion
-seeds and the additional models) used the identical configuration but was
-not freshly audited.
+original twenty-seed grading run; later grading used the identical
+configuration but was not freshly audited. Three further reading rules
+come from adversarial checks of the grading pipeline (each check, its
+fix, and the numbers it moved are logged in the released defect ledger).
+Detection rewards recall only: naming precision is 0.29--0.35 for all
+four models against at-threshold stress, rising to 0.36--0.43 when
+namings of real but sub-threshold activity (a tightening freight market,
+a wobbling supplier) are not counted against it. On weeks with several
+simultaneous stresses, the any-overlap rule counts a partial diagnosis as
+diagnosed (55--70\% of such diagnosed weeks named only a subset); under a
+stricter full-coverage rule the \textsc{persistent} peak persists exactly
+for the two models where it is significant. And the remaining misses are
+mostly right-censored: of the 16--29 never-detected episodes per model,
+9--17 begin in weeks 24--25 with one or two rationales left to catch them
+--- a hard tail that every model faces equally.
 
-Two design choices qualify behavioral readings of the traces. Once a
-second supplier contract is signed, the world offers no way to end it
-(the lapse action affects only unsigned offers), so the weekly
-dual-sourcing fee is unavoidable from that point on, for every agent, and
-paying it is not by itself a decision error. And the two paid
-intelligence levers (audit and briefing) return near-deterministic ground
+Two design choices qualify behavioral readings of the traces. A signed
+second supplier contract cannot be ended (the lapse action affects only
+unsigned offers), so the weekly dual-sourcing fee is unavoidable from
+that point for every agent, and paying it is not by itself a decision
+error. And the paid audit and briefing return near-deterministic ground
 truth by design, so what varies across models is how often they are
 consulted, not how well their output is read.
 
-The cost-side numbers rest on single runs. Each model--seed cell is one
+The cost-side numbers rest on single runs: each model--seed cell is one
 run, and provider-side nondeterminism is unquantified. Group means pool
 11--23 seeds, and the cross-model contrasts (a 0.85-point overall skill
-spread against detection rates within four
-points of one another) are far larger than plausible single-run noise, but
-per-seed values should be read as samples, not estimates. The oracle
-reference is a 20-replication mean with standard error 0.2--1.8\% of the
-reference cost.
+spread against detection rates within four points of one another) are far
+larger than plausible single-run noise, but per-seed values should be
+read as samples, not estimates.
 
 Finally, the benchmark covers one domain, one SKU, one prompt arm, and
 four models. The tapes are generated from published seeds rather than
@@ -817,18 +883,90 @@ E.~Bayraktar and M.~Ludkovski.
 Inventory management with partially observed nonstationary demand.
 \emph{Annals of Operations Research}, 176(1):7--39, 2010.
 
+\bibitem{rabiner1989hmm}
+L.~R.~Rabiner.
+A tutorial on hidden Markov models and selected applications in speech
+recognition.
+\emph{Proceedings of the IEEE}, 77(2):257--286, 1989.
+
 \end{thebibliography}
 
 \newpage
 \appendix
 \section*{Appendix}
 
+\section{Benchmark Comparison}
+\label{app:related}
+
+\begin{table}[h]
+  \caption{The benchmarks closest to STOCKTAKE (Section~2). Cells condense
+  each paper's own description of its task and reference policies;
+  citations in the main text. RetailBench builds its simulator from real
+  retail records; ours is synthetic and seeded.}
+  \label{tab:related}
+  \centering
+  \small
+  \setlength{\tabcolsep}{5pt}
+  \begin{tabular}{@{}l >{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{1.6cm} >{\raggedright\arraybackslash}p{2.9cm} >{\raggedright\arraybackslash}p{3.1cm} l@{}}
+    \toprule
+    Benchmark & Setting & Horizon & Hidden state & Reference policy & Belief graded \\
+    \midrule
+    Vending-Bench & vending machine & 2{,}000 messages & per-step noise only & none (human baseline) & no \\
+    AIM-Bench & five inventory envs & 20 rounds (NVP); varies & stochastic demand, lead times & hindsight optimum & no \\
+    RetailBench & retail store sim & 180 days & news-impact and supplier params & rule-based, privileged & no \\
+    \midrule
+    \textbf{STOCKTAKE} & import replenishment & 26 weeks & six persistent factor processes & Bayes-filter rollout on the agent's observations & yes \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
 \section{World and Cost Parameters}
 \label{app:world}
 
 All values below are read directly from the environment source; they fully
 specify the weekly cost function and the six hidden factor processes of
-Section~3.
+Section~3, diagrammed in Figure~\ref{fig:world}.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.88\textwidth]{figures/fig_world.pdf}
+  \caption{The hidden world behind the dashboard. The hidden state is six
+  independent Markov chains; starred regimes are the stress regimes that
+  define episodes in Section~4. Each chain emits one symptom stream
+  into the weekly dashboard, and those streams are all the agent (and the
+  oracle) ever sees. Two symptoms mislead by construction (orange): the
+  supplier scorecard reads one severity band better than the truth, and
+  the canal's transit counts crash identically for a real closure and a
+  false alarm.}
+  \label{fig:world}
+\end{figure}
+
+\begin{algorithm}[h]
+\caption{Event-tape generation. One random stream $r$, seeded once, is
+consumed by the six factors in a fixed order; no step reads an agent
+action, so the tape is a pure function of the seed. Lines 5--10 are the
+transition kernel $P^i$ and line 11 the emission kernel $Q^i$ of
+Section~3.2; every onset rate, persistence rate, age cap, and band mean
+is tabulated below. A few factors draw auxiliary state from the same
+stream in the same fixed order, such as the canal event's type at onset.}
+\label{alg:tape}
+\begin{algorithmic}[1]
+\State $r \gets \textsc{Random}(\mathit{seed})$
+\State $(s^i, a^i) \gets (\text{baseline}^i,\, 0)$ for each factor $i$ \Comment{regime and its age}
+\For{week $t = 1, \dots, 26$}
+  \For{factor $i$ in fixed order} \Comment{canal, supplier, demand, freight, port, quality}
+    \If{$s^i$ is the baseline}
+      \State leave it for regime $k$ w.p.\ $\mathrm{onset}^i_k$, else stay \Comment{e.g.\ clear $\to$ building}
+    \Else
+      \State stay w.p.\ $\mathrm{persist}^i(s^i, a^i)$, else advance a stage or recover \Comment{forced out at $\mathrm{cap}^i(s^i)$}
+    \EndIf
+    \State $a^i \gets a^i{+}1$ if the regime held, else $0$; \quad $x_t^i \gets (s^i, a^i)$
+    \State $y_t^i \gets$ factor $i$'s readings, drawn from $r$ around its band's mean \Comment{e.g.\ $\mathrm{round}\,\mathcal{N}(\mu_{\text{band}}, \sigma)$}
+  \EndFor
+\EndFor
+\State \Return the tape $(x_{1:26},\, y_{1:26})$
+\end{algorithmic}
+\end{algorithm}
 
 \paragraph{Costs.} Each week's cost is the sum of the applicable components:
 

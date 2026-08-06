@@ -1,0 +1,193 @@
+# Final benchmark results, four models at n=50 (FREEZE #2, 2026-07-15)
+
+All numbers script-computed from the canonical files (never hand-typed):
+`backend/runs/ladder-v1/skill_scores.csv` (skill), `beliefs.csv` +
+`belief_metrics.csv` (detection / knowing-doing), `oracle_refs.csv` (20-rep
+oracle means). Regenerate every table with
+`uv run python runs/results_tables.py` (from `backend/`; Tables 1–4) or
+`bench.py report`. This file was regenerated 2026-07-15 from the 2026-07-11
+run files (commit 932ce7a) after the deepseek/grok completion pass.
+
+**Convention (settled at this freeze): belief tables are episode-pooled**
+(every stress episode / stress week counts once, as printed by
+`results_tables.py`). `report.md` / `belief_metrics.csv` use per-seed means;
+the two agree within 0.03 everywhere (e.g. sonnet lag 0.39 vs 0.42). Any
+table in the paper states which convention it uses; default is this file's.
+
+Provenance: FAITHFUL prompt arm only. Four models, all 50 seeds each, via
+OpenRouter: anthropic/claude-sonnet-5, openai/gpt-5.4,
+deepseek/deepseek-v4-pro, x-ai/grok-4.5. Runs completed 2026-07-08 through
+2026-07-11. gemini was dropped after a 1-seed smoke test (binding decision).
+
+**Deepseek correction (must be disclosed if the pre-correction numbers were
+ever shared):** the 2026-07-09 freeze reported deepseek on a 20-seed core
+subset and excluded "6 pre-rationale traces". That was wrong about the
+files: valid full-rationale re-runs existed on disk, but the belief grader
+had graded stale overwritten files (its resume logic skipped re-runs). Fix:
+156 stale `beliefs.csv` rows deleted (backup `beliefs.csv.bak`), the 20
+genuinely missing deepseek seeds and 5 missing grok seeds were run, graded,
+and rescored. Full-50 deepseek numbers differ drastically from the core-20
+era (COMPOUND mean +0.24 vs +0.72; ALL −0.23 vs −0.24 with a very different
+group profile) — never cite the core-20 numbers.
+
+Traces: `backend/runs/ladder-v1/<model>/seedN-rich.chat.txt`, all validated
+(26 weeks + EPISODE DONE). Belief labels: grader v2 prompt, same-week
+alignment (`backend/runs/grade_beliefs.py`, gpt-5-mini, temperature 0).
+
+Seed design: 50 seeds in three stress profiles — ISOLATED n=12, PERSISTENT
+n=15, COMPOUND n=23. Sampling deliberately oversamples compound stress (the
+regime the benchmark targets); group means are reported per group and never
+pooled across groups without the per-group table alongside.
+
+## Metric properties (state these wherever skill is reported)
+
+- skill = (basestock − llm) / (basestock − oracle_mean). 0 = base-stock
+  floor, 1 = fair-oracle mean. skill > 1 is legitimate (the oracle is fair,
+  not optimal).
+- Seed 11 has negative oracle headroom (basestock − oracle = −218): the
+  floor already beats the fair oracle there, so skill is undefined. Excluded
+  from all means as a metric property → flagship n=49. The paper must state
+  this rule.
+- Headroom across the 50 seeds: min −218, median 1211, max 2532. Thin
+  headroom (< $700): seeds 36, 160, 164 — skill on these is noisy; flagged,
+  not excluded.
+
+## Table 1 — skill score
+
+| model | ISOLATED | PERSISTENT | COMPOUND | ALL | neg seeds | beats floor |
+|---|---|---|---|---|---|---|
+| sonnet-5 | +0.54 (med +0.71, n=11) | +0.70 (med +0.61, n=15) | +0.33 (med +0.35, n=23) | +0.49 (med +0.45, n=49) | 9 | 40/50 |
+| gpt-5.4 | +0.21 (med +0.07, n=11) | +0.55 (med +0.61, n=15) | +0.86 (med +0.73, n=23) | +0.62 (med +0.65, n=49) | 8 | 42/50 |
+| deepseek-v4-pro | −0.62 (med −0.57, n=11) | −0.68 (med −0.26, n=15) | +0.24 (med +0.32, n=23) | −0.23 (med +0.15, n=49) | 22 | 28/50 |
+| grok-4.5 | −0.14 (med −0.32, n=11) | −0.24 (med −0.12, n=15) | −0.06 (med +0.05, n=23) | −0.13 (med −0.08, n=49) | 28 | 21/50 |
+
+"Beats floor" is denominator-free (llm cost < basestock cost, counted over
+every seed run including seed 11 and thin-headroom seeds) — use it as the
+robustness companion to skill, which is denominator-sensitive on thin seeds.
+neg = scoreable seeds below the floor. Per-seed values: skill_scores.csv.
+
+Shape notes (single run per cell):
+- Two of four models end BELOW the symptom-blind base-stock floor overall.
+- The old "gpt and sonnet swap ranks along the stress axis" claim is dead:
+  sonnet's best group is PERSISTENT (+0.70, 0 negative seeds), not ISOLATED.
+  The real shape is 3-vs-1: gpt, deepseek, and grok are all comparatively
+  best on COMPOUND; sonnet is the lone exception (worst there; 7 of its 9
+  negative seeds are COMPOUND).
+- Deepseek's core-20 vs expansion-30 split is consistent (ALL mean −0.24 vs
+  −0.23) — the expansion did not drag it down; the core-20-era story was an
+  artifact of which seeds were graded/scored.
+- Deepseek COMPOUND retains one extreme positive seed (99, skill 1.85);
+  prefer the median when citing deepseek COMPOUND.
+
+## Table 2 — detection (episode-pooled)
+
+Episode = maximal run of consecutive weeks one factor is truly stressed
+(283 episodes over the 50 seeds, per model). Lag in weeks from episode
+start to the factor first appearing in the agent's stated rationale.
+
+| model | episodes missed | detected | mean lag (detected) |
+|---|---|---|---|
+| sonnet-5 | 33/283 | 88% | 0.42 |
+| gpt-5.4 | 35/283 | 88% | 0.40 |
+| deepseek-v4-pro | 46/283 | 84% | 0.32 |
+| grok-4.5 | 37/283 | 87% | 0.32 |
+
+Detection is flat: 84–88% across a skill spread of +0.62 to −0.23, and the
+two models that LOSE to the symptom-blind floor name factors slightly
+FASTER than the two that beat it. Perception does not separate these
+models; action does. This is the paper's headline dissociation.
+
+## Table 3 — knowing-doing rate (pooled weeks)
+
+Among weeks where the agent's rationale correctly named at least one truly
+stressed factor: fraction that still ended in a stockout.
+
+| model | ISOLATED | PERSISTENT | COMPOUND | all |
+|---|---|---|---|---|
+| sonnet-5 | 0.24 (n=72) | 0.43 (n=187) | 0.30 (n=256) | 0.34 (n=515) |
+| gpt-5.4 | 0.08 (n=63) | 0.37 (n=188) | 0.22 (n=251) | 0.26 (n=502) |
+| deepseek-v4-pro | 0.07 (n=60) | 0.40 (n=161) | 0.22 (n=248) | 0.26 (n=469) |
+| grok-4.5 | 0.09 (n=69) | 0.34 (n=199) | 0.21 (n=276) | 0.24 (n=544) |
+
+The rate peaks on PERSISTENT for all four models (0.34–0.43) and is lowest
+on ISOLATED (0.07–0.24) — a uniform regularity at the belief level.
+
+**KDR is ONE channel of acting-failure, not a ranking.** Overall KDR
+rank-inverts with skill: sonnet (near-best skill) has the highest rate,
+grok (worst skill) the lowest. The gap has two faces — under-response
+(stockout despite correct diagnosis; what this table measures) and
+over-response (premium-lever overspend / hoarding to avoid stockouts, which
+a stockout-based rate cannot see). Grok and deepseek buy their low KDR with
+over-response. Never present Table 3 as "who converts knowing into doing
+best" without this framing. Behavioral evidence: TRACE-INSIGHTS-2026-07-10.md.
+
+## Table 4 — severity confound check (report next to Table 3)
+
+Stockout rate on truly-stressed weeks, split by whether the agent's
+rationale correctly diagnosed the stress that week:
+
+| model | diagnosed | undiagnosed |
+|---|---|---|
+| sonnet-5 | 0.34 (n=515) | 0.19 (n=162) |
+| gpt-5.4 | 0.26 (n=502) | 0.14 (n=175) |
+| deepseek-v4-pro | 0.26 (n=469) | 0.11 (n=208) |
+| grok-4.5 | 0.24 (n=544) | 0.12 (n=133) |
+
+Per-group split printed by `runs/results_tables.py`; the extreme case is
+grok PERSISTENT: 0.34 diagnosed vs 0.03 undiagnosed. Diagnosed weeks stock
+out MORE than undiagnosed ones, for every model and in every group. So the
+knowing-doing rate is confounded by severity: weeks bad enough to be
+noticed are also bad enough to stock out, and a stockout in week W may be
+caused by an order placed weeks earlier. Interpret Table 3 as "correct
+diagnosis does not guarantee shelf protection," NOT as "diagnosis causes
+stockouts" or a week-level fault measure. The paper must carry this caveat,
+and cross-model KDR comparisons stay soft.
+
+## Interpretation constraints for the paper (from the trace audit)
+
+Full evidence in `research/TRACE-INSIGHTS-2026-07-10.md` (adversarially
+verified). Binding on any prose that uses these results:
+
+- Failure taxonomy (quotable): sonnet over-doses REAL disruptions — in its
+  9 negative seeds, air-expedite spend alone exceeds its entire excess over
+  the floor, and ~90% of those air calls coincide with genuine disruption.
+  gpt structurally under-uses levers — skips lock_freight in 87% of its
+  freight-spike seeds and inspect_batch in 63% of its quality-reject seeds
+  while naming the condition in its rationale.
+- World-mechanic disclosures (not agent failures): (a) `contract_action=
+  lapse` is a no-op on live contracts — once a second contract is signed
+  the ~$4/week dual-source fee is unavoidable for everyone; (b) buy_audit /
+  buy_briefing are near-deterministic ground-truth oracles by design —
+  usage rate is the model variable, never reading accuracy.
+- Batch-vs-drip: gpt is the confirmed large-batch outlier (~9 order-weeks
+  of ~53 units); the other three are comparably dripper-like. No clean
+  "closest to base-stock" ranking exists.
+- The refuted-claims list in TRACE-INSIGHTS §5 is do-not-reintroduce.
+
+## Grader-label validation (done 2026-07-08, on the 20-seed subset)
+
+Two independent checks; second-grader data in
+`backend/runs/ladder-v1/grader_agreement.csv`:
+
+1. Stratified 30-row manual read (10 metric-relevant hits, 10 misses, 10
+   calm-week labels) against raw trace rationales: all 10 hit-class
+   intersections correct; 9/10 misses genuinely the model's (1 ambiguous,
+   direction pessimistic for detection); calm-week labels ~50% over-labeled,
+   a class the metrics exclude by construction.
+2. Independent second grader (claude-haiku-4.5, identical prompt, 100 sampled
+   weeks): exact-label agreement 43% — the task is ambiguous on borderline
+   benign mentions — but agreement on the metric-relevant quantity
+   (label ∩ true stress) is 89%.
+
+The validation sampled the original 20-seed grading run; all later grading
+(30 expansion seeds, deepseek regrade, grok) used the identical
+prompt/model/temperature and is covered by the same argument, not by a
+fresh sample.
+
+## Known open items
+
+- Single run per (model, seed) cell; provider nondeterminism unquantified.
+- Grader validation not re-sampled over the expansion seeds or grok.
+- Deepseek seed-99 trace: cite deepseek COMPOUND by median.
+- Optional analyses (not blockers): audit-usage-vs-skill correlation;
+  whether sonnet/gpt ever attempt the lapse no-op.
