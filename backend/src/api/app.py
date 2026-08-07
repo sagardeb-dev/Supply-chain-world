@@ -231,7 +231,7 @@ def benchmark(seed: int) -> JSONResponse:
 
 
 # ----------------------------------------------------------------------
-# Agent harness: run/stream/advance/log. One deepagents session plays a
+# Agent harness: run/stream/advance/log. One langgraph agent session plays a
 # whole 26-week episode; its reasoning, tool calls, and results stream out
 # over SSE. Two modes (autonomous / step_gated) and true resume by run_id
 # (the agent's messages live in the sqlite checkpointer entered at lifespan;

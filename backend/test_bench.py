@@ -16,8 +16,10 @@ def test_skill_formula():
 
 
 def test_skill_zero_headroom_excluded():
-    r = bench.score_row("m", 11, basestock=800.0, oracle_mean=900.0, oracle_se=5.0, cost=850.0)
-    assert r["skill"] == ""  # seed-11 rule: negative headroom -> unscoreable
+    # the "seed-11 rule" (ladder-v1): negative headroom -> unscoreable. Seed 11
+    # was swapped out 2026-08-06; the rule itself is seed-agnostic.
+    r = bench.score_row("m", 157, basestock=800.0, oracle_mean=900.0, oracle_se=5.0, cost=850.0)
+    assert r["skill"] == ""
 
 
 def test_llm_cost_takes_last_match():
@@ -43,7 +45,9 @@ def test_trace_valid_predicate(tmp_path):
 def test_config_consistency():
     seeds = [s for g in C.GROUPS.values() for s in g]
     assert len(seeds) == len(set(seeds)), "seed duplicated across groups"
-    assert C.CORE20 <= set(seeds)
+    # CORE20 is a ladder-v1 historical constant; the 2026-08-06 swap removed
+    # seeds 24/36 from GROUPS, so it is no longer a subset of the live set.
+    assert len(C.CORE20) == 20
     assert C.all_seeds() == sorted(seeds)
     assert C.group_of(157) == "ISOLATED"
     assert C.openrouter_name("anthropic-claude-sonnet-5") == "anthropic/claude-sonnet-5"

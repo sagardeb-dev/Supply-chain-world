@@ -18,6 +18,50 @@ from .service import (svc_audit, svc_briefing, svc_expedite, svc_inspect,
                       svc_lock, svc_order_component, svc_step)
 
 
+def belief_factor_ids(present: set) -> list[str]:
+    """The hidden-factor vocabulary for a world with these registered module
+    ids -- registry-driven (a CORE run must not be asked about a freight
+    market it does not have). disruption + supplier are engine-level and
+    always present; the rest exist iff their module is registered. Shared by
+    the tool validation here and the prompt text (prompt.py)."""
+    return (["disruption", "supplier"]
+            + [f for f in ("demand", "freight", "port", "quality") if f in present])
+
+
+def belief_factors(run) -> list[str]:
+    return belief_factor_ids({m.id for m in run.world.registry})
+
+
+def _validate_beliefs(beliefs, factors: list[str]):
+    """Return (parsed dict, None) or (None, rejection message). Accepts a JSON
+    string too (some models stringify nested args)."""
+    if isinstance(beliefs, str):
+        try:
+            beliefs = json.loads(beliefs)
+        except json.JSONDecodeError:
+            return None, "beliefs must be a JSON object, not free text"
+    if not isinstance(beliefs, dict):
+        return None, "beliefs must be an object mapping factor -> probability"
+    missing = [f for f in factors if f not in beliefs]
+    extra = [k for k in beliefs if k not in factors]
+    if missing or extra:
+        return None, (f"beliefs must have exactly these keys: {factors}"
+                      + (f"; missing {missing}" if missing else "")
+                      + (f"; unknown {extra}" if extra else ""))
+    out = {}
+    for f in factors:
+        v = beliefs[f]
+        if isinstance(v, str):  # lenient: accept "0.9" -- we grade calibration, not JSON typing
+            try:
+                v = float(v)
+            except ValueError:
+                pass
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v <= 1:
+            return None, f"beliefs[{f!r}] must be a number in [0, 1], got {v!r}"
+        out[f] = float(v)
+    return out, None
+
+
 def make_tools(run):
     """Two tools closed over a run (exposes .world and .record(week,kind,payload))."""
 
@@ -123,7 +167,7 @@ def make_tools(run):
                 f"({r['staged']} order(s) staged this week; place_order ships them).")
 
     @tool
-    def place_order(rationale: str, qty: int, route: str = "",
+    def place_order(rationale: str, beliefs: dict, qty: int, route: str = "",
                     supplier: str = "", contract_action: str = "",
                     contract_supplier: str = "", contract_terms: str = "") -> str:
         """Commit this week's decision AND/OR manage a supplier contract, then
@@ -133,6 +177,12 @@ def make_tools(run):
         read your demand/inventory position, the lane/disruption risk, freight,
         and sourcing, and say why this qty/route/supplier (and any contract).
         The week does not advance without it; it is your visible thinking.
+
+        beliefs (REQUIRED): your current probability, between 0 and 1, that
+        each listed factor is RIGHT NOW actively disrupting your operations
+        (0 = definitely not, 1 = definitely). One number per factor, e.g.
+        {"disruption": 0.1, "supplier": 0.6, ...}. State your honest estimate
+        from the evidence; the week does not advance without it.
 
         Ordering: qty is a whole number of units (0 means order nothing; the
         cap is order_max). If qty > 0 you MUST pass route
@@ -148,6 +198,12 @@ def make_tools(run):
         source it in the same call. Use qty 0 to manage a contract without
         ordering. Returns the new week's situation report and whether the
         episode is finished."""
+        if not (rationale or "").strip():
+            return ("REJECTED (week not advanced): rationale must contain your "
+                    "actual reasoning for this week, not be empty")
+        parsed_beliefs, err = _validate_beliefs(beliefs, belief_factors(run))
+        if err:
+            return f"REJECTED (week not advanced): {err}"
         canonical = route if route else None
         sup = (supplier or _incumbent()) if qty else None
         contract = None
@@ -163,13 +219,30 @@ def make_tools(run):
             return (f"REJECTED (week not advanced, staged orders kept): {e}")
         obs = r["obs"]
         run.record(obs.get("week"), "place_order",
-                   {"rationale": rationale, "qty": qty, "route": canonical,
+                   {"rationale": rationale, "beliefs": parsed_beliefs,
+                    "qty": qty, "route": canonical,
                     "supplier": sup, "contract": contract, "cost": r["cost"],
                     "done": r["done"], "obs": obs})
         tail = "  EPISODE DONE." if r["done"] else ""
         cmsg = f" contract={contract}" if contract else ""
         return (f"Order placed: qty={qty} route={canonical} supplier={sup}.{cmsg} "
                 f"Week cost {r['cost']}.{tail}\nNew situation:\n{_obs_text(obs)}")
+
+    @tool
+    def report_final_beliefs(beliefs: dict) -> str:
+        """AFTER the episode reports done: state your final probability, 0 to
+        1, that each factor is actively disrupting operations in the CURRENT
+        (final) week, same format as place_order's beliefs. Call this exactly
+        once, when asked, after the last week -- it closes out the run. Not
+        usable mid-episode."""
+        if not run.world.done:
+            return ("REJECTED: the episode is still running -- report weekly "
+                    "beliefs via place_order; this tool is for after the end.")
+        parsed, err = _validate_beliefs(beliefs, belief_factors(run))
+        if err:
+            return f"REJECTED: {err}"
+        run.record(run.world.week, "final_beliefs", {"beliefs": parsed})
+        return "Final beliefs recorded. The run is complete."
 
     tools = [buy_briefing, place_order]
     # order_component only exists where there is more than one component to buy
@@ -194,16 +267,19 @@ def make_tools(run):
     if any(m.id == "quality" for m in run.world.registry):
         tools.append(inspect_batch)
 
-    # A tool call after week 26 must not kill a completed episode (gemini does
-    # this); answer it with text instead of letting service raise RuntimeError.
+    # report_final_beliefs is the one tool that runs ONLY after done, so it
+    # is appended after the episode guard is applied to everything else.
     def _episode_guard(fn):
+        # A tool call after week 26 must not kill a completed episode (gemini
+        # does this); answer with text instead of a service RuntimeError.
         def guarded(*a, **k):
             if run.world.done:
-                return ("EPISODE DONE. The 26-week run is over; "
-                        "no further actions are possible.")
+                return ("EPISODE DONE. The 26-week run is over; no further "
+                        "actions are possible except report_final_beliefs.")
             return fn(*a, **k)
         return guarded
 
     for t in tools:
         t.func = _episode_guard(t.func)
+    tools.append(report_final_beliefs)
     return tools

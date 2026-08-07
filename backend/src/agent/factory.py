@@ -1,11 +1,19 @@
-"""Builds the deepagents agent: an OpenRouter ChatOpenAI model + the world
-tools (2–4 depending on which modules are active) + the system prompt.
-interrupt_on gates place_order in step-gated mode. No fallback: a missing
-OPENROUTER_API_KEY raises loudly."""
+"""Builds the agent: an OpenRouter ChatOpenAI model + the world tools
+(2-4 depending on which modules are active) + the system prompt, wired
+through plain `langchain.agents.create_agent` -- no framework middleware,
+no injected tools, the prompt goes to the model verbatim. (The July 2026
+ladder-v1 runs used deepagents, which silently added write_todos/file/
+execute/task tools and appended its own scaffold prompt -- DEFECTS.md D15.
+deepagents was removed 2026-08-06; reproducing those runs needs the
+pre-removal checkout.) Step-gated mode gates place_order via langchain's
+own HumanInTheLoopMiddleware -- the same middleware deepagents delegated
+to, so the interrupt/resume payload shapes are unchanged. No fallback: a
+missing OPENROUTER_API_KEY raises loudly."""
 
 import os
 
-from deepagents import create_deep_agent
+from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_openai import ChatOpenAI
 
 from .prompt import SYSTEM_PROMPT
@@ -39,11 +47,12 @@ def build_agent(model_slug: str, mode: str, tools, checkpointer,
     unchanged."""
     if mode not in ("autonomous", "step_gated"):
         raise ValueError(f"unknown mode {mode!r}")
-    interrupt_on = {"place_order": True} if mode == "step_gated" else None
-    return create_deep_agent(
+    middleware = ([HumanInTheLoopMiddleware(interrupt_on={"place_order": True})]
+                  if mode == "step_gated" else [])
+    return create_agent(
         model=build_model(model_slug),
         tools=tools,
         system_prompt=system_prompt,
+        middleware=middleware,
         checkpointer=checkpointer,
-        interrupt_on=interrupt_on,
     )

@@ -107,8 +107,15 @@ def resolve_week(books: Books, orders, route: str | None, h: HiddenState,
         shortfall_units += qty - shipped
         if shipped:
             fmult = eff.get("freight_mult", 1.0)
+            # contract terms scale the route base (D17-audit fix 2026-08-06:
+            # the negotiated unit_price was quoted off the Suez base and
+            # DISPLAYED but never billed -- the "price-lock" was decoration).
+            # One contract per supplier post-replace-fix; no contract -> 1.0
+            # (unreachable for shipped lines: sourcing requires a contract).
+            tmult = next((c.unit_price / cfg.suez_unit_cost
+                          for c in books.contracts if c.supplier == sid), 1.0)
             base = ((cfg.suez_unit_cost if route == "suez" else cfg.cape_unit_cost)
-                    * fmult)
+                    * tmult * fmult)
             # unit economics: route base + supplier econ sign*magnitude + the
             # component's own cost delta (the pricey ANC chip). cfg / products
             # stay the single source of truth for every magnitude.

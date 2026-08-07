@@ -238,6 +238,83 @@ the delta; (c) if the delta moves skill materially, full clean rerun
 becomes the canonical result and the deepagents runs become a scaffolding
 ablation. Pairs naturally with the D14 snapshot-pinning fix and the
 Blackwell repeats ablation (same spend event).
+**Addendum 2026-08-06:** (1) deepagents' default stack also includes a
+SummarizationMiddleware (auto-compacts history at ~85% of context window /
+170k-token fallback) — trace audit shows it NEVER fired: largest of the 200
+episode traces is 42KB (~10k tokens), and the only "summarize" matches are
+the agents' own todo text. D15 stays bounded to the todo tool + appended
+prompt. (2) **RESOLVED IN CODE (same day):** deepagents deleted from the
+codebase entirely. `build_agent` (`src/agent/factory.py`) now uses plain
+`langchain.agents.create_agent` — no middleware, no injected tools, our
+prompt verbatim; step-gated mode keeps working via langchain's own
+`HumanInTheLoopMiddleware` (the same middleware deepagents delegated to,
+so interrupt/resume payloads are unchanged). Smoke test: both modes bind
+exactly the 6 world tools (deep bound 15); 160/160 tests pass. Dependency
+swapped in pyproject (`deepagents` out, `langchain` in as direct dep).
+`bench.py report` now stamps a `harness` field in manifest.json
+(ladder-v1 → "deepagents 0.6.10 scaffold (D15)", anything later →
+clean). Reproducing the July runs requires the pre-2026-08-06 checkout.
+Still open: the paper-side decision — disclose-only vs clean-harness
+pilot vs full rerun (options a/b/c above) — and correcting the
+"rules-only prompt" sentence.
+
+## D16 — contract lapse was a silent no-op on live contracts  [FIXED IN CODE 2026-08-06; ladder-v1 disclosure pending]
+
+Found by week-by-week audit of the first ladder-v2 pilot trace (qwen, seed
+1): the agent lapsed the spot contract 4 times, engine returned success each
+time, contract survived, dual_source overhead ($4/wk) billed all episode
+($92). Root cause (`engine.py _apply_contract_action`): the lapse branch
+dropped only contracts already OPEN (expired / counterparty dead) — exactly
+backwards; a live evergreen contract (the masked task's spot incumbent) was
+un-lapsable, silently. No test covered lapse. ladder-v1 exposure: 112/200
+episodes contain lapse attempts (231 calls, all no-ops), differential by
+model — grok 37, deepseek 31, sonnet 27, gpt 17 episodes. References
+unaffected: the oracle only signs (its code comment even assumes lapse
+works), the floor never lapses — so basestock/oracle numbers stand; the harm
+is a broken lever whose $4/wk cost models tried and failed to shed, plus any
+downstream strategy distortion. Fix: lapse now ends ALL of that supplier's
+contracts; regression test test_lapse_ends_a_live_contract. Paper: one
+disclosure sentence for v1 results (lever documented but inoperative on live
+contracts; per-week cost impact bounded by dual_source totals, ≤$4/wk).
+
+## D17 — contract-terms economics were decoration  [FIXED IN CODE 2026-08-06]
+
+Found by the systematic docs-vs-physics conformance audit (agent report:
+archive/surveys-2026-08-06/conformance-audit.md) triggered by D16. Three
+mechanics the prompt promised were stored and DISPLAYED but never billed:
+(a) the negotiated `unit_price` (short −3% / long +6% "price-lock") never
+reached the shipping calculation — all terms billed identically (verified
+first-hand: short and long both bill $100.0 on identical orders while
+displaying 3.88 vs 4.24 unit prices); (b) `break_fee` was never charged, so
+"hard to exit" had no teeth; (c) sign/switch/renew on a still-live supplier
+appended a DUPLICATE contract instead of replacing (only open ones were
+dropped — same backwards filter as D16). Fixes: contract price multiplier
+now scales the route base in `logistics.resolve_week`; lapse of a live
+contract bills `break_fee` (new cost category); sign/switch/renew replaces
+unconditionally. `otif_floor` remains display-only by DECISION (no defined
+penalty economics; inventing one pre-deadline is worse) — the prompt no
+longer claims "the supplier owes you on a slip". Reference invariance
+verified byte-identical after the physics change: floors + suez costs on
+seeds 0/1/143/300/415 match sweep to 1e-6; oracle seed300 k=50 = 6215
+exactly (references sign with terms=None → base-price contracts, never
+lapse, never use backup). ladder-v1 exposure: consistent-but-fake pricing
+(nobody received a discount, so no differential billing), but models chose
+terms weighing decorative numbers. Tests:
+test_contract_terms_price_is_billed, test_switch_replaces_live_contract_
+no_duplicates, test_lapse_live_contract_bills_break_fee.
+
+## D18 — backup onboarding was display-only  [FIXED IN CODE 2026-08-06]
+
+Prompt promised backup needs "1 week of onboarding before its FIRST order
+can ship"; `onboard_weeks=1` was config + scorecard display, no enforcement
+(verified: sign+order same week ships full 20 immediately). Fixed: an
+order line for a supplier inside its onboarding window is REJECTED with the
+ship-from week named. Test: test_backup_onboarding_gates_first_order.
+Prompt-truth edits in the same pass: crisis back-order coupling wording
+broadened to match `couplings.crisis_backorder` (fires on watch/crash too,
+any supplier's shortfall); empty `rationale` now REJECTED (was
+schema-present-but-blank-allowed); freight-lock idle-week burn got its
+missing regression test (test_freight_lock_burns_on_idle_week).
 
 ## Verification trail
 
@@ -248,3 +325,31 @@ byte-identical under D2a, and uq.py sanity gates updated to the corrected
 tables and passing. Alignment of rationale→week was probe-tested: 99.1%
 of 1,255 quoted-inventory checks match (11 misses are agent arithmetic,
 not parser offset).
+
+## D20 — rejected step left contract sub-action applied (found 2026-08-07, FIXED)
+
+Found by the audit gate on shakeout-35b seed29 (first automated catch).
+`World.step()` applied sign/switch/renew/lapse BEFORE validating the order
+lines; when validation raised (e.g. onboarding), the ValueError aborted the
+week but the contract mutation stayed — "REJECTED (week not advanced)" was a
+lie about contract state. Real runs accumulated silent renewals that a clean
+replay (which skips rejected calls) never saw -> replay divergence at wk11.
+Fix: snapshot (contracts, pending break fee, onboarded set) before the
+sub-action, roll back on ValueError. engine.py step(). Test:
+test_rejected_step_rolls_back_contract_action.
+
+## D21 — renewing a live contract restarted onboarding (found 2026-08-07, FIXED)
+
+Same trace. sign/switch/renew stamps start=current week; the D18 onboarding
+gate keys on contract start, so renewing an already-onboarded supplier
+(backup, onboard_weeks=1) re-triggered "is onboarding" every time — the
+combined call "renew backup + order backup" could NEVER succeed (perpetual
+trap; agent hit it at wk6/9/12/14/16/18/20). Fix: World tracks _onboarded
+suppliers (onboarding completed under an unbroken contract chain); renewal
+carries the status over; lapse clears it (re-engaging re-onboards). Test:
+test_renew_live_contract_keeps_onboarded_status.
+Impact of both: references invariant (floor never contracts, oracle never
+renews/rejects — seed300 oracle k=50 = 6215 exact, floor 8322 post-fix).
+All 9 prior CLEAN traces (pilot-v2, smoke-slm) re-audit CLEAN; 6 completed
+shakeout-35b traces re-audit CLEAN and were kept; seed29 quarantined
+(.AUDIT-FAIL) and rerun.

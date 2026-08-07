@@ -30,12 +30,19 @@ start with 80 units on hand. Demand is roughly 20 units a week (it drifts -- \
 see DEMAND below), served from on-hand inventory; unmet demand is a stockout.
 
 YOUR LEVERS (these are the only actions; mirror them exactly)
-- place_order(rationale, qty, route, supplier, contract_action, \
+- place_order(rationale, beliefs, qty, route, supplier, contract_action, \
 contract_supplier, contract_terms): one weekly decision that may place an \
 order, manage a contract, or both.
   - rationale (REQUIRED, every week): a few sentences working through THIS \
 week's decision and why this qty/route/supplier (and any contract). The \
 world does not advance without it.
+  - beliefs (REQUIRED, every week): an object giving, for each of \
+disruption, supplier, demand, freight, port, quality, your probability \
+(a number from 0 to 1) that that pressure is RIGHT NOW actively disrupting \
+your operations (0 = definitely not, 1 = definitely). State your honest \
+read of the evidence each week; the world does not advance without it. \
+After the final week reports the episode done, you will be asked once for \
+report_final_beliefs(beliefs) in the same format to close out the run.
   - qty: any whole number of units to order this week, from 0 up to 100. \
 0 = order nothing (no route/supplier needed). There is no fixed menu.
   - route "suez" or "cape" (required if qty > 0):
@@ -82,8 +89,9 @@ degraded one ships NOTHING; and it can go DEFUNCT (fail for good, gone for the \
 rest of the horizon). You read it off an OTIF scorecard (ontime / slipping / \
 failing / defunct). "slipping" is ambiguous -- it is either a wobble that \
 recovers or the first week of a real failure; the following weeks tell you \
-which. AND a spot shortfall DURING a lane disruption is back-ordered at a \
-crisis rate about 3x a normal stockout.
+which. AND a supply shortfall while the corridor is DISTURBED (the watch \
+build-up, the ambiguous crash week, or a confirmed disruption) is \
+back-ordered at a crisis rate about 3x a normal stockout.
 - backup (a second qualified source): reliable (95% OTIF), a small premium \
 (+0.3/unit over the route base), but it needs 1 week of onboarding before its \
 FIRST order can ship.
@@ -92,15 +100,17 @@ CONTRACTS (the gate on sourcing)
 - You can only source a supplier you currently hold a live contract with. The \
 report shows your `contracts`, `contract_open` (contracts that have expired or \
 whose supplier died -- these need renewing), and `term_menu`.
-- contract_action "sign"/"switch"/"renew" opens a fresh contract on the chosen \
-supplier with the chosen terms; "lapse" drops an open contract (surrender). A \
+- contract_action "sign"/"switch"/"renew" REPLACES that supplier's contract \
+with a fresh one on the chosen terms (re-negotiating is not an exit -- no \
+fee); "lapse" ENDS that supplier's contract -- ending one early (still live) \
+costs its break fee; surrendering an already-open contract is free. A \
 contract auto-opens when it expires or its supplier dies, and qualified's \
 contract is evergreen.
-- terms menu (the locked unit price is set off the Suez base, 4/unit):
-    - "short": 4 weeks, ~3% cheaper, easy to exit.
-    - "long": 12 weeks, ~6% dearer (a price-lock), hard to exit.
-    - "strict": 8 weeks, high OTIF floor (the supplier owes you on a slip).
-    - "lenient": 8 weeks, ~5% cheaper, no real penalty -- you eat the risk.
+- terms menu (the negotiated price scales the route base; break fees differ):
+    - "short": 4 weeks, ~3% cheaper, half break fee (easy to exit).
+    - "long": 12 weeks, ~6% dearer, double break fee (hard to exit).
+    - "strict": 8 weeks, ~3% dearer, highest posted OTIF floor.
+    - "lenient": 8 weeks, ~5% cheaper, standard break fee -- you eat the risk.
 - Carrying 2 or more live contracts costs 4/week (dual-source overhead).
 
 COSTS (every number is real; weigh them)
@@ -314,6 +324,16 @@ def build_system_prompt(world, coached: bool = False) -> str:
         assert stripped != base, (
             "quality-lever anchor stopped matching SYSTEM_PROMPT")
         base = stripped
+    if not {"demand", "freight", "port", "quality"} <= present:
+        # beliefs vocabulary must match the world: swap the full 6-factor list
+        # for this registry's list (same source as the tool's validation).
+        from .tools import belief_factor_ids
+        _before_b = base
+        base = base.replace(
+            "disruption, supplier, demand, freight, port, quality",
+            ", ".join(belief_factor_ids(present)))
+        assert base != _before_b, (
+            "beliefs factor-list anchor stopped matching SYSTEM_PROMPT")
     if not {"freight", "port", "quality"} <= present:
         # honesty: a CORE/partial world doesn't emit every channel/cost below.
         _before = base

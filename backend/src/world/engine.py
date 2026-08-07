@@ -93,6 +93,10 @@ class World:
         self.trace = []
         self._briefing = None  # paid assessment bought at this decision point
         self._audit = None     # paid supplier audit (masked task), same pattern
+        self._pending_break_fee = 0.0  # early contract exits billed this week
+        # suppliers whose onboarding completed under an unbroken contract chain
+        # (D21 fix: renewing a live contract must not restart onboarding)
+        self._onboarded = set()
         obs = self._build_obs(arrived=0, costs={})
         self.trace.append({"week": 0, "hidden": self.hidden.to_dict(),
                            "hidden_states": self._hidden_full(),
@@ -268,20 +272,44 @@ class World:
         if act not in ("sign", "switch", "renew", "lapse"):
             raise ValueError(f"unknown contract action {act!r}")
         if act == "lapse":
+            # D16 fix (2026-08-06): lapse ends ALL of this supplier's
+            # contracts, live ones included. The old filter kept any contract
+            # that was still live (only dropped expired/dead-counterparty
+            # ones), making lapse a SILENT NO-OP on exactly the contracts an
+            # agent would want to exit -- e.g. the evergreen spot incumbent.
+            # D19 fix (2026-08-06): ending a contract EARLY (still live)
+            # charges its break fee -- the "hard to exit" teeth the terms menu
+            # always promised. Surrendering an already-open contract is free.
             alive = self._alive()
+            for c in self.books.contracts:
+                if c.supplier == sup and not contract_open(c, self.week, alive):
+                    self._pending_break_fee += c.break_fee
             self.books.contracts = [
-                c for c in self.books.contracts
-                if not (c.supplier == sup
-                        and contract_open(c, self.week, alive))]
+                c for c in self.books.contracts if c.supplier != sup]
+            # exiting breaks the relationship: re-engaging later re-onboards
+            self._onboarded.discard(sup)
             return
         if sup not in self.suppliers:
             raise ValueError(f"cannot contract unknown supplier {sup!r}")
-        # sign/switch/renew: drop any open contract for that supplier, add fresh
-        # one built from the chosen menu terms (the negotiation, R5).
-        alive = self._alive()
+        # D21 fix (2026-08-07, shakeout-35b seed29): renewing/re-signing a LIVE
+        # supplier whose onboarding is already complete must not restart the
+        # onboarding clock -- the old start=self.week stamp made every renewal
+        # re-trigger the gate, a perpetual "is onboarding" trap.
+        ob = SUPPLIERS[sup].get("onboard_weeks", 0)
+        if ob:
+            alive = self._alive()
+            for c in self.books.contracts:
+                if (c.supplier == sup and not contract_open(c, self.week, alive)
+                        and self.week >= c.start_week + ob):
+                    self._onboarded.add(sup)
+        # sign/switch/renew: REPLACE any contract for that supplier (live or
+        # open), add a fresh one from the chosen menu terms (the negotiation,
+        # R5). D17-audit fix (2026-08-06): the old filter only dropped OPEN
+        # contracts, so re-signing a live supplier silently accumulated
+        # duplicate contract records. Re-negotiating the same supplier is not
+        # an exit, so no break fee here (lapse is the exit path).
         self.books.contracts = [
-            c for c in self.books.contracts
-            if not (c.supplier == sup and contract_open(c, self.week, alive))]
+            c for c in self.books.contracts if c.supplier != sup]
         self.books.contracts.append(
             self._new_contract(sup, start=self.week, terms=ca.get("terms")))
 
@@ -321,52 +349,80 @@ class World:
         if self.done:
             raise RuntimeError("episode is done; call reset()")
         # contract sub-action (sign/switch/renew/lapse) resolves first, so a
-        # freshly-signed supplier is immediately sourceable this week.
+        # freshly-signed supplier is immediately sourceable this week. D20 fix
+        # (2026-08-07, shakeout-35b seed29): a step that later FAILS validation
+        # must leave no trace -- snapshot the contract state and roll it back on
+        # rejection, or rejected calls mutate the world ("week not advanced"
+        # promised otherwise).
+        contract_snapshot = None
         if action.get("contract"):
+            contract_snapshot = (list(self.books.contracts),
+                                 self._pending_break_fee,
+                                 set(self._onboarded))
             self._apply_contract_action(action["contract"])
 
-        prod = products.structure(self.cfg.product)
-        # this week's order lines: the staged component orders, else -- back-compat
-        # -- one legacy line for the sole component synthesized from a bare
-        # {qty, supplier}. Staged orders are cleared only AFTER validation passes:
-        # a failed step (bad route, missing contract) must leave them staged so
-        # the agent's corrected retry still dispatches them.
-        staged = self.books.staged_orders
-        qty = action.get("qty", 0)
-        route = action.get("route")
-        supplier = action.get("supplier")
-        if staged and qty:
-            raise ValueError(
-                "component orders are staged; pass qty=0 (a bare qty would be "
-                "silently ignored)")
-        if staged:
-            orders = staged
-        elif qty:
-            orders = [{"component": prod.component_ids[0],
-                       "qty": qty, "supplier": supplier}]
-        else:
-            orders = []
-        # validate every line (known component, qty bound, known + contracted
-        # supplier). No fallback: a bad line raises, exactly like the old path.
-        for line in orders:
-            q = line["qty"]
-            if not (0 <= q <= self.cfg.order_max):
-                raise ValueError(f"qty must be in 0..{self.cfg.order_max}, got {q}")
-            if line["component"] not in prod.component_ids:
-                raise ValueError(f"unknown component {line['component']!r}")
-            if q and line["supplier"] not in self.suppliers:
+        try:
+            prod = products.structure(self.cfg.product)
+            # this week's order lines: the staged component orders, else -- back-compat
+            # -- one legacy line for the sole component synthesized from a bare
+            # {qty, supplier}. Staged orders are cleared only AFTER validation passes:
+            # a failed step (bad route, missing contract) must leave them staged so
+            # the agent's corrected retry still dispatches them.
+            staged = self.books.staged_orders
+            qty = action.get("qty", 0)
+            route = action.get("route")
+            supplier = action.get("supplier")
+            if staged and qty:
                 raise ValueError(
-                    f"qty {q} needs a known supplier, got {line['supplier']!r}")
-            # per-contract mask: you may only source from a supplier you hold a
-            # live contract with (no fallback).
-            if q and line["supplier"] not in self._contracted_suppliers():
-                raise ValueError(
-                    f"no live contract with {line['supplier']!r}; sign one first "
-                    f"(contracted: {sorted(self._contracted_suppliers())})")
-        # a shipping line needs the week's shared route.
-        if any(l["qty"] for l in orders) and route not in ("suez", "cape"):
-            raise ValueError(f"a shipping order needs route suez or cape, "
-                             f"got {route!r}")
+                    "component orders are staged; pass qty=0 (a bare qty would be "
+                    "silently ignored)")
+            if staged:
+                orders = staged
+            elif qty:
+                orders = [{"component": prod.component_ids[0],
+                           "qty": qty, "supplier": supplier}]
+            else:
+                orders = []
+            # validate every line (known component, qty bound, known + contracted
+            # supplier). No fallback: a bad line raises, exactly like the old path.
+            for line in orders:
+                q = line["qty"]
+                if not (0 <= q <= self.cfg.order_max):
+                    raise ValueError(f"qty must be in 0..{self.cfg.order_max}, got {q}")
+                if line["component"] not in prod.component_ids:
+                    raise ValueError(f"unknown component {line['component']!r}")
+                if q and line["supplier"] not in self.suppliers:
+                    raise ValueError(
+                        f"qty {q} needs a known supplier, got {line['supplier']!r}")
+                # per-contract mask: you may only source from a supplier you hold a
+                # live contract with (no fallback).
+                if q and line["supplier"] not in self._contracted_suppliers():
+                    raise ValueError(
+                        f"no live contract with {line['supplier']!r}; sign one first "
+                        f"(contracted: {sorted(self._contracted_suppliers())})")
+                # onboarding gate (D18-audit fix 2026-08-06): a supplier with
+                # onboard_weeks > 0 cannot ship until that many weeks after its
+                # contract started. Was documented (backup: 1 week) but never
+                # enforced -- display-only.
+                if q:
+                    sid = line["supplier"]
+                    ob = SUPPLIERS[sid].get("onboard_weeks", 0)
+                    if ob and sid not in self._onboarded:
+                        start = max((c.start_week for c in self.books.contracts
+                                     if c.supplier == sid), default=None)
+                        if start is not None and self.week < start + ob:
+                            raise ValueError(
+                                f"{sid} is onboarding until week {start + ob}; "
+                                f"its first order can ship then, not this week")
+            # a shipping line needs the week's shared route.
+            if any(l["qty"] for l in orders) and route not in ("suez", "cape"):
+                raise ValueError(f"a shipping order needs route suez or cape, "
+                                 f"got {route!r}")
+        except ValueError:
+            if contract_snapshot is not None:  # rejected step: undo sub-action
+                (self.books.contracts, self._pending_break_fee,
+                 self._onboarded) = contract_snapshot
+            raise
         # validation passed: NOW consume the staged lines (like air_inbound).
         self.books.staged_orders = []
 
@@ -439,6 +495,9 @@ class World:
         live = len(self._contracted_suppliers())
         if live >= 2:
             costs["dual_source"] = self.cfg.dual_source_overhead
+        if self._pending_break_fee:
+            costs["break_fee"] = self._pending_break_fee
+            self._pending_break_fee = 0.0
 
         cost = float(sum(costs.values()))
         self.total_cost += cost

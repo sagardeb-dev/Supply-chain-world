@@ -96,7 +96,38 @@ def cmd_run(args):
             if not trace_valid(f):
                 print(f"!!! INCOMPLETE: {mdir} seed{s} (rerun `bench.py run` to retry)")
                 missing += 1
+                continue
+            # post-episode audit gate (D16 lesson): a trace only counts if the
+            # engine replay keeps every documented promise the agent used.
+            from analysis.audit_trace import audit as audit_trace
+            fails = audit_trace(f, s)
+            if fails:
+                bad = f.with_suffix(".chat.txt.AUDIT-FAIL")
+                f.rename(bad)
+                print(f"!!! AUDIT FAIL {mdir} seed{s}: {fails[:3]}... "
+                      f"(trace moved to {bad.name}; fix cause, rerun)")
+                missing += 1
     print(f"\nrun done: {ran} launched, {missing} incomplete")
+
+
+def cmd_status(args):
+    """Real-time run status: per-model complete/incomplete counts for the exp,
+    plus the week the most recently active episode has reached (from the
+    newest recorder .log). No more waiting 30 minutes for buffered output."""
+    import json as _json
+    import time as _time
+    for mdir in C.MODELS:
+        done = sum(trace_valid(trace_path(args.exp, mdir, s)) for s in C.all_seeds())
+        if done or (RUNS / args.exp / mdir).is_dir():
+            print(f"{mdir}: {done}/{len(C.all_seeds())} episodes complete")
+    logs = sorted(RUNS.glob("*.log"), key=lambda p: p.stat().st_mtime)
+    if logs:
+        newest = logs[-1]
+        weeks = [_json.loads(l)["week"] for l in newest.open()
+                 if '"place_order"' in l]
+        age = int(_time.time() - newest.stat().st_mtime)
+        print(f"active episode: week {max(weeks) if weeks else 0}/26 "
+              f"(last event {age}s ago, {newest.name})")
 
 
 def cmd_oracle(args):
@@ -111,6 +142,7 @@ def cmd_oracle(args):
         sys.exit(f"refusing to compute {len(todo)} seeds (CPU-minutes each) without "
                  f"--seeds or --yes: {todo}")
     new_file = not out.is_file()
+    out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "a", newline="") as f:
         if new_file:
             f.write("seed,mean,se,n,min,max\n")
@@ -230,6 +262,14 @@ def cmd_report(args):
         "code": f"commit {git or 'unknown'}",
         "world": "RICH 6-factor, single product, masked (sup_mask_otif=true)",
         "prompt_arm": "faithful (rules only, no playbook)",
+        # ladder-v1 ran July 2026 on the deepagents scaffold (injected
+        # write_todos/file/execute/task tools + appended SDK prompt --
+        # DEFECTS.md D15); deepagents was removed 2026-08-06, so every
+        # later experiment runs the clean harness.
+        "harness": ("deepagents 0.6.10 scaffold (see DEFECTS.md D15)"
+                    if args.exp == "ladder-v1" else
+                    "clean (plain langchain create_agent: world tools only, "
+                    "prompt verbatim)"),
         "seeds": C.GROUPS,
         "core20": sorted(C.CORE20),
         "models": {m: ("all" if keep is None else "core20") for m, keep in C.MODELS.items()},
@@ -272,6 +312,9 @@ def main():
 
     p = sub.add_parser("report", help="report.md + manifest.json")
     p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("status", help="live per-model completion + active episode week")
+    p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("all", help="run -> oracle -> score -> grade -> report")
     p.add_argument("--models", nargs="*")

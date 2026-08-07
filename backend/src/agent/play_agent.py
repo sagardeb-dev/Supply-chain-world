@@ -14,6 +14,7 @@ agent's own cost, broken down -- compare runs/models on the same seed.
 """
 
 import argparse
+import json
 import textwrap
 from pathlib import Path
 from uuid import uuid4
@@ -69,6 +70,7 @@ def run_agent(seed, model, mode, semantics, rich, product="single",
     # the out-of-order STAGE clumps).
     pending: dict[str, str] = {}
     in_week = False   # a "== DECIDING WEEK n ==" header is open
+    snapshot = None   # D14: the provider-resolved model version, off the reply
 
     def week_header():
         nonlocal in_week
@@ -92,6 +94,15 @@ def run_agent(seed, model, mode, semantics, rich, product="single",
                 continue
             for m in delta.get("messages", []):
                 if isinstance(m, AIMessage):
+                    if snapshot is None:
+                        meta = getattr(m, "response_metadata", {}) or {}
+                        snapshot = meta.get("model_name") or meta.get("model")
+                        if snapshot:
+                            # streamed AIMessageChunks CONCATENATE metadata
+                            # strings on merge -> "slugslug"; fold it back
+                            h = len(snapshot) // 2
+                            if snapshot[:h] == snapshot[h:]:
+                                snapshot = snapshot[:h]
                     week_header()
                     txt = _msg_text(m)
                     if txt:
@@ -101,9 +112,27 @@ def run_agent(seed, model, mode, semantics, rich, product="single",
                         args = {k: v for k, v in (tc.get("args") or {}).items()
                                 if v not in ("", None)}
                         rat = args.pop("rationale", None)  # required per-week reasoning
+                        bel = args.pop("beliefs", None)    # required per-week beliefs
                         call = ("\n  >> " + tc["name"] + "("
                                 + ", ".join(f"{k}={v}" for k, v in args.items())
                                 + ")")
+                        if bel is not None:
+                            # one line, stable JSON -- the belief parser greps this
+                            try:
+                                b = bel if isinstance(bel, dict) else json.loads(bel)
+                                if isinstance(b, dict):
+                                    # mirror validator leniency ("0.9" -> 0.9) so
+                                    # the auditor/parser downstream see numbers
+                                    for k, v in b.items():
+                                        if isinstance(v, str):
+                                            try:
+                                                b[k] = float(v)
+                                            except ValueError:
+                                                pass
+                                bel_s = json.dumps(b)
+                            except (TypeError, ValueError):
+                                bel_s = str(bel)
+                            call += f"\n     BELIEFS: {bel_s}"
                         if rat:
                             call += "\n" + _wrap_block(
                                 "RATIONALE: " + str(rat), indent="     ")
@@ -125,9 +154,27 @@ def run_agent(seed, model, mode, semantics, rich, product="single",
                          + ("  ** EPISODE DONE **" if p["done"] else ""))
                     emit(f"  SITUATION  {_obs_summary(p['obs'])}")
                     emit(f"  hidden: {_fmt_hidden(rec)}")
+      # episode over: one closing turn to collect the final week's beliefs
+      # (the last world-advance has no following decision, so without this the
+      # final state would never get a belief statement -- grade_beliefs D2a).
+      if run.world.done:
+          if not any(r["kind"] == "final_beliefs" for r in run.recorder):
+              for update in agent.stream(
+                      {"messages": [{"role": "user", "content":
+                          "The episode is done. Close out the run: call "
+                          "report_final_beliefs once with your final beliefs "
+                          "for the current (final) week."}]},
+                      config, stream_mode="updates"):
+                  pass  # recorded via the tool; trace line printed below
+          fb = next((r["payload"]["beliefs"] for r in run.recorder
+                     if r["kind"] == "final_beliefs"), None)
+          emit(f"\nFINAL BELIEFS: {json.dumps(fb) if fb else 'NOT REPORTED'}")
+          # D14: pin the provider-resolved model version into the trace
+          emit(f"MODEL SNAPSHOT: {snapshot or 'unreported'}")
+          break
       # keep nudging while each nudge buys progress (some models stall every
       # couple of weeks); stop when one buys nothing, or at a safety cap.
-      if run.world.done or run.world.week == last_nudge_week or nudges >= 40:
+      if run.world.week == last_nudge_week or nudges >= 40:
           break
       last_nudge_week = run.world.week
       nudges += 1
@@ -406,6 +453,10 @@ def main():
         tag = "" if args.product == "single" else f"-{args.product}"
         tag += "-rich" if args.rich else ""
         tag += "-coached" if args.coached else ""
+        # NOTE: traces from 2026-08-06 on are clean-harness (deepagents
+        # removed, DEFECTS.md D15); the July ladder-v1 traces under the same
+        # naming are deep-harness. Reruns go to a NEW --exp dir; bench.py
+        # skips complete traces, so ladder-v1 cannot be overwritten.
         out = (Path("runs") / args.exp / args.model.replace("/", "-")
                / f"seed{args.seed}{tag}.chat.txt")
         out.parent.mkdir(parents=True, exist_ok=True)

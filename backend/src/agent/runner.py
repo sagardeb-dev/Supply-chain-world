@@ -5,7 +5,7 @@ events into SSE lines. No fallback logic: every failure becomes an
 `error` SSE event and the run stops.
 
 Resume rests on two persisted halves keyed by the same run_id: the agent's
-message history (deepagents' AsyncSqliteSaver, owned by the API layer) and
+message history (langgraph's AsyncSqliteSaver, owned by the API layer) and
 the World object (pickled here). Both restore to the same week because the
 World snapshot is written inside the place_order tool_result boundary, the
 same point the agent checkpoints.

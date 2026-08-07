@@ -350,21 +350,30 @@ def execute(w, cand: dict) -> float:
 # --------------------------------------------------------------------------
 # Weekly driver.
 # --------------------------------------------------------------------------
-def run_oracle(seed: int, k: int = 100, cfg: WorldConfig = None, trace: bool = False,
-               trans_override: dict = None, week_rows: list = None) -> float:
-    cfg = cfg or WorldConfig(sup_mask_otif=True)
-    w = World(cfg, registry=RICH)
-    w.reset(seed)
+def warm_filters(w, cfg: WorldConfig = None, trans_override: dict = None) -> dict:
+    """Filters stepped on every observation in w.trace EXCEPT the last -- the
+    play loop (oracle_play) steps the current week's obs itself as its first
+    move, exactly as run_oracle does from week 0. Lets the oracle continue
+    from a mid-episode World (analysis/regret.py)."""
+    cfg = cfg or w.cfg
     filts = {f: build(cfg) for f, (build, _) in FACTORS.items()}
     if trans_override:
-        # learned-dynamics oracle (fit_oracle.py): swap the transition tables;
-        # filtering AND lookahead sampling both read filt.trans, so this one
-        # override replaces every use of the true dynamics.
         for f, filt in filts.items():
             filt.trans = trans_override[f]
-    mc_rng = random.Random(seed * 7919 + 13 + k)  # separate stream; never touches world.rng
-    cum = 0.0
+    for rec in w.trace[:-1]:
+        for filt in filts.values():
+            filt.step(rec["obs"])
+    return filts
 
+
+def oracle_play(w, filts: dict, mc_rng, k: int = 100, trace: bool = False,
+                week_rows: list = None) -> float:
+    """Drive the oracle from w's CURRENT state to episode end; returns the
+    cost incurred from here on (not w.total_cost -- the world may carry
+    earlier cost from another policy). filts must be warmed on all obs before
+    the current week (warm_filters)."""
+    cfg = w.cfg
+    cum = 0.0
     while not w.done:
         obs = w.trace[-1]["obs"]
         for filt in filts.values():
@@ -410,6 +419,20 @@ def run_oracle(seed: int, k: int = 100, cfg: WorldConfig = None, trace: bool = F
                   f"lock={int(c['lock_freight'])} air={c['air_qty']:>2} insp={int(c['inspect'])} "
                   f"signQ={int(c['sign_qualified'])} | cost={cost:>7.1f} cum={cum:>8.1f}")
 
+    return cum
+
+
+def run_oracle(seed: int, k: int = 100, cfg: WorldConfig = None, trace: bool = False,
+               trans_override: dict = None, week_rows: list = None) -> float:
+    cfg = cfg or WorldConfig(sup_mask_otif=True)
+    w = World(cfg, registry=RICH)
+    w.reset(seed)
+    # fresh world: trace holds only week 0, so warm_filters steps nothing and
+    # oracle_play's first move is filtering week 0's obs -- byte-identical
+    # behavior to the pre-refactor loop.
+    filts = warm_filters(w, cfg, trans_override)
+    mc_rng = random.Random(seed * 7919 + 13 + k)  # separate stream; never touches world.rng
+    oracle_play(w, filts, mc_rng, k, trace=trace, week_rows=week_rows)
     return w.total_cost
 
 

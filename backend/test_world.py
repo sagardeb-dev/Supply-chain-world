@@ -480,7 +480,9 @@ def test_agent_tools_gating():
             self.events.append((week, kind))
 
     run = FakeRun()
-    buy_briefing, place_order = make_tools(run)
+    from src.agent.tools import belief_factors
+    buy_briefing, place_order, _final_beliefs = make_tools(run)
+    B = {f: 0.1 for f in belief_factors(run)}  # valid beliefs for this world
 
     # the week-0 obs now reaches the agent via the kickoff message; no leak
     from src.agent.runner import kickoff_message
@@ -496,14 +498,15 @@ def test_agent_tools_gating():
     # qty>0 with no route is REJECTED (no default route) as a tool message --
     # the engine raised, the tool relayed, and the week did NOT advance.
     before = run.world.week
-    out = place_order.invoke({"rationale": "t", "qty": 20,
+    out = place_order.invoke({"rationale": "t", "beliefs": B, "qty": 20,
                               "supplier": "qualified", "route": ""})
     assert "REJECTED" in out and "route" in out
     assert run.world.week == before
 
     # a valid order advances the world one week and records the event
     before = run.world.week
-    out = place_order.invoke({"rationale": "stock up, lane calm", "qty": 20,
+    out = place_order.invoke({"rationale": "stock up, lane calm", "beliefs": B,
+                              "qty": 20,
                               "supplier": "qualified", "route": "suez"})
     assert run.world.week == before + 1
     assert "Order placed" in out
@@ -513,7 +516,7 @@ def test_agent_tools_gating():
     # 3.1 does this; a stray call must not kill a completed 26-week trace)
     while not run.world.done:
         run.world.step({"order_qty": 20, "route": "suez", "supplier": "qualified"})
-    out = place_order.invoke({"rationale": "t", "qty": 20,
+    out = place_order.invoke({"rationale": "t", "beliefs": B, "qty": 20,
                               "supplier": "qualified", "route": "suez"})
     assert "EPISODE DONE" in out
     out = buy_briefing.invoke({})
@@ -622,8 +625,11 @@ def test_place_order_event_carries_obs(tmp_path, monkeypatch):
     # a real run + a genuine place_order event in the recorder
     run = AgentRun("po-run", seed=3, model_slug="x", mode="autonomous",
                    semantics="real", masked=False)  # plumbing: simple world
+    from src.agent.tools import belief_factors
     place_order = next(t for t in make_tools(run) if t.name == "place_order")
-    place_order.invoke({"rationale": "stock up, lane calm", "qty": 20,
+    place_order.invoke({"rationale": "stock up, lane calm",
+                        "beliefs": {f: 0.1 for f in belief_factors(run)},
+                        "qty": 20,
                         "supplier": "qualified", "route": "suez"})
     assert run.recorder and run.recorder[-1]["kind"] == "place_order"
 
@@ -1163,6 +1169,126 @@ def test_two_live_contracts_incur_dual_source_overhead():
     assert obs["cost_breakdown"]["dual_source"] == CFG.dual_source_overhead
 
 
+def test_contract_terms_price_is_billed():
+    """D17-audit regression: the negotiated unit_price must scale the billed
+    shipping, not just display. short (0.97) vs long (1.06) on identical
+    orders must differ by exactly the multiplier ratio."""
+    ship = {}
+    for terms in ("short", "long"):
+        w = World(); w.reset(1)
+        w.step({"qty": 0, "contract": {"action": "switch",
+                                       "supplier": "qualified", "terms": terms}})
+        w.step({"qty": 20, "route": "suez", "supplier": "qualified"})
+        ship[terms] = w.trace[-1]["obs"]["cost_breakdown"]["shipping"]
+    assert ship["long"] > ship["short"], ship
+    # base 4/unit: short bills 4*0.97+1 = 4.88/u, long 4*1.06+1 = 5.24/u
+    assert abs(ship["short"] - 20 * (4 * 0.97 + 1)) < 0.01, ship
+    assert abs(ship["long"] - 20 * (4 * 1.06 + 1)) < 0.01, ship
+
+
+def test_switch_replaces_live_contract_no_duplicates():
+    """D17-audit regression: re-signing a live supplier must REPLACE its
+    contract, not accumulate duplicates."""
+    w = World(); w.reset(1)
+    w.step({"qty": 0, "contract": {"action": "switch",
+                                   "supplier": "qualified", "terms": "long"}})
+    rows = [c for c in w.trace[-1]["obs"]["contracts"]
+            if c["supplier"] == "qualified"]
+    assert len(rows) == 1, rows
+    assert abs(rows[0]["unit_price"] - 4 * 1.06) < 0.01, rows
+
+
+def test_lapse_live_contract_bills_break_fee():
+    """D19-audit regression: ending a still-live contract costs its break fee
+    (long = 2x base fee); surrendering an already-open one is free."""
+    w = World(); w.reset(1)
+    w.step({"qty": 0, "contract": {"action": "sign", "supplier": "spot",
+                                   "terms": "long"}})
+    w.step({"qty": 0, "contract": {"action": "lapse", "supplier": "spot"}})
+    cb = w.trace[-1]["obs"]["cost_breakdown"]
+    assert cb.get("break_fee") == CFG.contract_break_fee * 2.0, cb
+
+
+def test_backup_onboarding_gates_first_order():
+    """D18-audit regression: backup (onboard_weeks=1) cannot ship the week it
+    is signed; the next week it can."""
+    import pytest
+    w = World(); w.reset(1)
+    with pytest.raises(ValueError, match="onboarding"):
+        w.step({"qty": 20, "route": "suez", "supplier": "backup",
+                "contract": {"action": "sign", "supplier": "backup",
+                             "terms": "short"}})
+    # the failed step never advanced; sign-only this week, order next week
+    w.step({"qty": 0, "contract": {"action": "sign", "supplier": "backup",
+                                   "terms": "short"}})
+    w.step({"qty": 20, "route": "suez", "supplier": "backup"})
+    assert any(s["supplier"] == "backup" for s in w.trace[-1]["obs"]["pipeline"])
+
+
+def test_rejected_step_rolls_back_contract_action():
+    """D20 regression (shakeout-35b seed29): a step whose ORDER fails
+    validation must undo its contract sub-action -- the old code applied the
+    sign/renew first and left it in place after raising, so rejected calls
+    silently mutated the world."""
+    import pytest
+    w = World(); w.reset(1)
+    before = list(w.books.contracts)
+    with pytest.raises(ValueError, match="onboarding"):
+        w.step({"qty": 20, "route": "suez", "supplier": "backup",
+                "contract": {"action": "sign", "supplier": "backup",
+                             "terms": "short"}})
+    assert w.books.contracts == before          # sign rolled back
+    assert "backup" not in w._contracted_suppliers()
+    assert w._pending_break_fee == 0.0
+
+
+def test_renew_live_contract_keeps_onboarded_status():
+    """D21 regression (shakeout-35b seed29): renewing an already-onboarded
+    supplier must not restart its onboarding window (the old start=now stamp
+    made 'renew backup + order backup' a perpetual rejection trap)."""
+    w = World(); w.reset(1)
+    w.step({"qty": 0, "contract": {"action": "sign", "supplier": "backup",
+                                   "terms": "short"}})
+    w.step({"qty": 0})   # onboarding week passes under the live contract
+    # renew AND order in the same call -- exactly the seed29 trap
+    w.step({"qty": 20, "route": "suez", "supplier": "backup",
+            "contract": {"action": "renew", "supplier": "backup",
+                         "terms": "short"}})
+    assert any(s["supplier"] == "backup" for s in w.trace[-1]["obs"]["pipeline"])
+
+
+def test_freight_lock_burns_on_idle_week():
+    """Audit gap: an unused lock week still decrements the window."""
+    from src.world.registry import RICH
+    w = World(registry=RICH); w.reset(3)
+    w.lock_freight(2)
+    w.step({"qty": 0})           # idle week -- no order shipped
+    assert w.books.freight_lock is not None
+    assert w.books.freight_lock.weeks_left == 1
+    w.step({"qty": 0})
+    assert w.books.freight_lock is None
+
+
+def test_lapse_ends_a_live_contract():
+    """D16 regression: lapse must end a LIVE contract (the old code only
+    dropped expired/dead-counterparty ones, so lapsing the evergreen
+    incumbent was a silent no-op and dual_source kept billing -- 112/200
+    ladder-v1 episodes hit this)."""
+    w = World()
+    w.reset(3)
+    w.step({"qty": 0, "contract": {"action": "sign", "supplier": "spot"}})
+    assert "spot" in w._contracted_suppliers()
+    w.step({"qty": 0, "contract": {"action": "lapse", "supplier": "spot"}})
+    assert "spot" not in w._contracted_suppliers()
+    # back to one live contract: the overhead stops the week after the lapse
+    w.step({"qty": 20, "supplier": "qualified", "route": "suez"})
+    assert w.trace[-1]["obs"]["cost_breakdown"].get("dual_source", 0.0) == 0.0
+    # and sourcing the lapsed supplier is refused (no live contract)
+    import pytest
+    with pytest.raises(ValueError):
+        w.step({"qty": 20, "supplier": "spot", "route": "suez"})
+
+
 def test_hard_gap_defunct_spot_leaves_you_stuck():
     """Locked decision (hard gap): when an exclusive spot supplier dies, you
     are STUCK -- you cannot even source it (its contract is now open), and
@@ -1633,7 +1759,7 @@ def test_lock_freight_tool_only_in_rich_world():
 
     base = [t.name for t in make_tools(FakeRun(None))]
     rich = [t.name for t in make_tools(FakeRun(RICH))]
-    assert base == ["buy_briefing", "place_order"]
+    assert base == ["buy_briefing", "place_order", "report_final_beliefs"]
     assert "lock_freight" in rich
 
 
@@ -1756,7 +1882,7 @@ def test_expedite_air_tool_only_in_rich_world():
 
     base = [t.name for t in make_tools(FakeRun(None))]
     rich = [t.name for t in make_tools(FakeRun(RICH))]
-    assert base == ["buy_briefing", "place_order"]
+    assert base == ["buy_briefing", "place_order", "report_final_beliefs"]
     assert "expedite_air" in rich
 
 
@@ -1886,7 +2012,7 @@ def test_inspect_batch_tool_only_in_rich_world():
 
     base = [t.name for t in make_tools(FakeRun(None))]
     rich = [t.name for t in make_tools(FakeRun(RICH))]
-    assert base == ["buy_briefing", "place_order"]
+    assert base == ["buy_briefing", "place_order", "report_final_beliefs"]
     assert "inspect_batch" in rich
 
 
@@ -2110,8 +2236,11 @@ def test_prompt_faithful_vs_coached_arms():
         world = w
         def record(self, *a, **k): pass
     from src.agent.tools import make_tools
+    from src.agent.tools import belief_factors
     place = next(t for t in make_tools(_Run()) if t.name == "place_order")
-    out = place.invoke({"rationale": "buffer up", "qty": 20, "route": "suez"})
+    out = place.invoke({"rationale": "buffer up",
+                        "beliefs": {f: 0.1 for f in belief_factors(_Run())},
+                        "qty": 20, "route": "suez"})
     assert "supplier=qualified" in out
 
 
